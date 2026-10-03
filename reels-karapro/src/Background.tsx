@@ -1,4 +1,4 @@
-import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
+import {AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
 import {C} from './brand';
 
 const HEX_W = 60;
@@ -6,6 +6,7 @@ const HEX_H = 104;
 
 export const Background: React.FC = () => {
 	const frame = useCurrentFrame();
+	const {width, height} = useVideoConfig();
 	const drift = interpolate(frame, [0, 900], [0, -HEX_H], {extrapolateRight: 'extend'});
 	const glowX = 30 + Math.sin(frame / 90) * 6;
 	const glowY = 22 + Math.cos(frame / 110) * 4;
@@ -17,7 +18,7 @@ export const Background: React.FC = () => {
 					background: `radial-gradient(circle at ${glowX}% ${glowY}%, rgba(154,110,234,0.32) 0%, rgba(85,58,158,0.12) 30%, rgba(0,0,0,0) 60%)`,
 				}}
 			/>
-			<svg width={1080} height={1920 + HEX_H} style={{position: 'absolute', top: drift % HEX_H}}>
+			<svg width={width} height={height + HEX_H} style={{position: 'absolute', top: drift % HEX_H}}>
 				<defs>
 					<pattern id="hex" width={HEX_W} height={HEX_H} patternUnits="userSpaceOnUse">
 						<path

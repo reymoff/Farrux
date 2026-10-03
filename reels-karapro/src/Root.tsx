@@ -1,4 +1,5 @@
 import {Composition} from 'remotion';
+import {EndCard, endCardSchema, HookOverlay, hookOverlaySchema} from './Horizontal';
 import {KaraProReel, reelDuration, reelSchema, type ReelProps} from './KaraProReel';
 
 const defaults: ReelProps = {
@@ -17,6 +18,7 @@ const defaults: ReelProps = {
 };
 
 export const RemotionRoot: React.FC = () => (
+	<>
 	<Composition
 		id="KaraProReel"
 		component={KaraProReel}
@@ -28,4 +30,25 @@ export const RemotionRoot: React.FC = () => (
 		durationInFrames={reelDuration(defaults)}
 		calculateMetadata={({props}: {props: ReelProps}) => ({durationInFrames: reelDuration(props)})}
 	/>
+	<Composition
+		id="HookOverlay"
+		component={HookOverlay}
+		schema={hookOverlaySchema}
+		defaultProps={{kicker: 'Тест-драйв', title: 'Монтаж с *ИИ*: Claude Code + Remotion'}}
+		width={1080}
+		height={720}
+		fps={30}
+		durationInFrames={120}
+	/>
+	<Composition
+		id="EndCard"
+		component={EndCard}
+		schema={endCardSchema}
+		defaultProps={{title: 'Хочешь так же *монтировать с ИИ*?', keyword: 'ИИ', note: 'напиши в директ', handle: '@karapro.agency'}}
+		width={1080}
+		height={720}
+		fps={30}
+		durationInFrames={90}
+	/>
+	</>
 );
