@@ -12,6 +12,10 @@
 | 6 | [video-use](https://github.com/browser-use/video-use) | режет сырое видео по расшифровке | скилл, нужен `ELEVENLABS_API_KEY` в `~/video-use/.env` |
 | 7 | [frontend-design](https://github.com/anthropics/claude-plugins-official) | выразительные кадры и страницы | плагин |
 
+## Шаблон рилса KaraPro
+
+`reels-karapro/`: готовый ролик на Remotion в стиле KaraPro, тексты меняются без кода. Подробности в его README.
+
 ## Рамка зон Instagram
 
 `assets/ramka-instagram-1080x1920.png`: прозрачный PNG 1080×1920. Кладёшь верхним слоем, смотришь, что закроет интерфейс Reels.
