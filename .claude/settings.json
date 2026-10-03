@@ -1,0 +1,17 @@
+{
+  "extraKnownMarketplaces": {
+    "hyperframes": { "source": { "source": "github", "repo": "heygen-com/hyperframes" } },
+    "impeccable": { "source": { "source": "github", "repo": "pbakaus/impeccable" } },
+    "claude-plugins-official": { "source": { "source": "github", "repo": "anthropics/claude-plugins-official" } }
+  },
+  "enabledPlugins": {
+    "hyperframes@hyperframes": true,
+    "impeccable@impeccable": true,
+    "frontend-design@claude-plugins-official": true
+  },
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/setup-video-kit.sh", "timeout": 600 } ] }
+    ]
+  }
+}
