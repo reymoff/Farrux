@@ -108,6 +108,11 @@ def sheets(video, out, dur, n):
                      "-q:v", "4", str(out / name)], check=False)
             if p.returncode == 0:
                 break
+    # Крупные кадры для чтения текста и шрифтов: первые 3 секунды и финал (призыв к действию).
+    run(["ffmpeg", "-y", "-v", "error", "-t", "3", "-i", str(video), "-vf", f"fps=1,scale=720:-2,{stamp}null".replace(",null", ""),
+         "-q:v", "3", str(out / "big_start_%02d.jpg")], check=False)
+    run(["ffmpeg", "-y", "-v", "error", "-sseof", "-2.5", "-i", str(video), "-vf", "fps=1,scale=720:-2",
+         "-q:v", "3", str(out / "big_end_%02d.jpg")], check=False)
     return sorted(x.name for x in out.glob("*.jpg"))
 
 
