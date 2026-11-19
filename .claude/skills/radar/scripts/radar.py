@@ -40,7 +40,9 @@ def ytdlp(*args, check=True):
 
 
 def load_db():
-    return json.loads(DB.read_text("utf-8")) if DB.exists() else {"videos": {}}
+    db = json.loads(DB.read_text("utf-8")) if DB.exists() else {"videos": {}}
+    db.setdefault("accounts", {})
+    return db
 
 
 def save_db(db):
@@ -82,6 +84,19 @@ def rescore(db):
         med = statistics.median([x for x in by[v["account"]] if x] or [0])
         v["outlier"] = round(v["views"] / med, 2) if med else 0
         v["er"] = round((v["likes"] + v["comments"]) / v["views"] * 100, 2) if v["views"] else 0
+    for name, vs in by.items():  # сводка по аккаунту для таблицы конкурентов
+        if not name:
+            continue
+        mine = [v for v in db["videos"].values() if v["account"] == name]
+        acc = db.setdefault("accounts", {}).setdefault(name, {"username": name})
+        dates = sorted(v["date"] for v in mine if v.get("date"))
+        weeks = 1
+        if len(dates) > 1:
+            weeks = max(1, (dt.date.fromisoformat(dates[-1]) - dt.date.fromisoformat(dates[0])).days / 7)
+        acc.update(posts=len(mine), median_views=int(statistics.median([x for x in vs if x] or [0])),
+                   avg_er=round(statistics.mean([v["er"] for v in mine if v["er"]] or [0]), 2),
+                   outliers=sum(1 for v in mine if v.get("outlier", 0) >= 3), per_week=round(len(dates) / weeks, 1),
+                   platform=mine[0]["platform"], followers=acc.get("followers") or max(v.get("followers") or 0 for v in mine))
 
 
 def upsert(db, r):
@@ -297,6 +312,11 @@ def cmd_ingest(a):
                      "likes": m.get("likes") or 0, "comments": m.get("comments") or 0, "followers": bd.get("followers") or 0,
                      "kind": m.get("type", ""), "has_video": bool(m.get("has_video"))})
     bd.setdefault("followers_count", bd.get("followers"))
+    if bd.get("username"):
+        prof = {"username": bd["username"], "name": bd.get("name") or "", "bio": bd.get("bio") or bd.get("biography") or "",
+                "website": bd.get("website") or "", "followers": bd.get("followers_count") or 0,
+                "follows": bd.get("follows") or bd.get("follows_count") or 0, "url": f"https://www.instagram.com/{bd['username']}/"}
+        dbp = load_db(); dbp["accounts"].setdefault(bd["username"], {}).update({k: v for k, v in prof.items() if v}); save_db(dbp)
     for m in (bd.get("media") or {}).get("data", []):
         code = m.get("permalink", "").rstrip("/").split("/")[-1] or m["id"]
         rows.append({"id": code, "url": m.get("permalink", ""), "platform": "instagram", "account": bd.get("username", ""),
@@ -347,6 +367,17 @@ def cmd_pics(a):
                       "порядок": "слева направо, сверху вниз, в порядке переданных ссылок"}, ensure_ascii=False, indent=1))
 
 
+def cmd_tag(a):
+    """Метки аккаунта для фильтров: ниша, гео, язык, пол и возраст автора или аудитории, заметка."""
+    db = load_db()
+    acc = db["accounts"].setdefault(a.username.lstrip("@"), {"username": a.username.lstrip("@")})
+    for k in ("niche", "geo", "lang", "gender", "age", "kind", "note"):
+        if getattr(a, k):
+            acc[k] = getattr(a, k)
+    rescore(db); save_db(db)
+    print(json.dumps(acc, ensure_ascii=False))
+
+
 # ---------- dash: один html-файл с фильтрами ----------
 
 PAGE = """<!doctype html><html lang=ru><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -365,6 +396,14 @@ th{font-size:12px;color:var(--mut);cursor:pointer;white-space:nowrap;user-select
 a{color:var(--acc);text-decoration:none}.hot{color:var(--acc);font-weight:700}.tag{font-size:11px;color:var(--mut)}
 details{margin-top:4px;color:var(--mut);font-size:13px;white-space:pre-wrap}</style>
 <h1>Радар конкурентов</h1><div class=sub id=sub></div>
+<h2 style="font-size:17px;margin:14px 0 8px">Аккаунты</h2>
+<div class=bar><input type=search id=aq placeholder="Поиск по нику, имени, био, заметке">
+<select id=an></select><select id=ag></select><select id=al></select><select id=ax></select><select id=aa></select>
+<select id=af><option value="0-0">Любой размер<option value="0-10000">до 10 тыс.<option value="10000-100000">10-100 тыс.<option value="100000-1000000">100 тыс.-1 млн<option value="1000000-0">от 1 млн</select></div>
+<div class=wrap style="margin-bottom:18px"><table><thead><tr><th data-a=username>Аккаунт</th><th data-a=niche>Ниша</th><th data-a=geo>Гео</th><th data-a=lang>Язык</th>
+<th data-a=gender>Пол</th><th data-a=age>Возраст</th><th data-a=followers>Подписчики</th><th data-a=median_views>Медиана просм.</th>
+<th data-a=avg_er>ER %</th><th data-a=outliers>Выбросов</th><th data-a=per_week>В неделю</th></tr></thead><tbody id=atb></tbody></table></div>
+<h2 style="font-size:17px;margin:14px 0 8px">Публикации</h2>
 <div class=bar><input type=search id=q placeholder="Поиск по заголовку, подписи, транскрипту">
 <select id=acc></select><select id=pf></select>
 <select id=out><option value=0>Любой выброс<option value=1.5>от x1.5<option value=2>от x2<option value=3>от x3<option value=5>от x5</select>
@@ -373,7 +412,7 @@ details{margin-top:4px;color:var(--mut);font-size:13px;white-space:pre-wrap}</st
 <th data-k=date>Дата</th><th data-k=account>Аккаунт</th><th data-k=title>Ролик</th><th data-k=views>Просмотры</th>
 <th data-k=outlier>Выброс</th><th data-k=er>ER %</th><th data-k=likes>Лайки</th><th data-k=comments>Комм.</th><th data-k=duration>Сек</th>
 </tr></thead><tbody id=tb></tbody></table></div>
-<script>const D=__DATA__;let sk='outlier',dir=-1;const $=id=>document.getElementById(id),f=n=>(n||0).toLocaleString('ru');
+<script>const A=__ACC__;const D=__DATA__;let sk='outlier',dir=-1;const $=id=>document.getElementById(id),f=n=>(n||0).toLocaleString('ru');
 const esc=s=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function opts(el,k,all){el.innerHTML='<option value="">'+all+[...new Set(D.map(v=>v[k]))].sort().map(x=>'<option>'+esc(x)).join('')}
 opts($('acc'),'account','Все аккаунты');opts($('pf'),'platform','Все площадки');
@@ -388,7 +427,14 @@ $('tb').innerHTML=r.map(v=>'<tr><td>'+v.date+'</td><td>'+esc(v.account)+'<br><sp
 esc(v.title||v.id)+'</a>'+(v.watched?' <span class=tag>👁 просмотрено</span>':'')+(v.transcript?'<details><summary>транскрипт</summary>'+esc(v.transcript)+'</details>':'')+
 '</td><td class=n>'+f(v.views)+'</td><td class="n '+(v.outlier>=3?'hot':'')+'">x'+(v.outlier||0)+'</td><td class=n>'+(v.er||0)+'</td><td class=n>'+f(v.likes)+
 '</td><td class=n>'+f(v.comments)+'</td><td class=n>'+(v.duration||'')+'</td></tr>').join('')}
-document.querySelectorAll('th').forEach(t=>t.onclick=()=>{dir=sk==t.dataset.k?-dir:-1;sk=t.dataset.k;draw()});
+document.querySelectorAll('th[data-k]').forEach(t=>t.onclick=()=>{dir=sk==t.dataset.k?-dir:-1;sk=t.dataset.k;draw()});
+let ak='median_views',ad=-1;function aopts(id,k,all){$(id).innerHTML='<option value="">'+all+[...new Set(A.map(v=>v[k]).filter(Boolean))].sort().map(x=>'<option>'+esc(x)).join('')}
+aopts('an','niche','Все ниши');aopts('ag','geo','Любое гео');aopts('al','lang','Любой язык');aopts('ax','gender','Любой пол');aopts('aa','age','Любой возраст');
+function adraw(){const q=$('aq').value.toLowerCase(),[lo,hi]=$('af').value.split('-').map(Number),m={niche:$('an').value,geo:$('ag').value,lang:$('al').value,gender:$('ax').value,age:$('aa').value};
+let r=A.filter(v=>Object.keys(m).every(k=>!m[k]||v[k]==m[k])&&(v.followers||0)>=lo&&(!hi||(v.followers||0)<hi)&&(!q||[v.username,v.name,v.bio,v.note].join(' ').toLowerCase().includes(q)));
+r.sort((x,y)=>((x[ak]||0)>(y[ak]||0)?1:(x[ak]||0)<(y[ak]||0)?-1:0)*ad);
+$('atb').innerHTML=r.map(v=>'<tr><td><a href="'+esc(v.url||'#')+'" target=_blank rel=noopener>'+esc(v.username)+'</a><br><span class=tag>'+esc(v.name||'')+'</span>'+(v.bio||v.note?'<details><summary>био и заметка</summary>'+esc(v.bio||'')+' | '+esc(v.note||'')+'</details>':'')+'</td><td>'+esc(v.niche||'')+'</td><td>'+esc(v.geo||'')+'</td><td>'+esc(v.lang||'')+'</td><td>'+esc(v.gender||'')+'</td><td>'+esc(v.age||'')+'</td><td class=n>'+f(v.followers)+'</td><td class=n>'+f(v.median_views)+'</td><td class=n>'+(v.avg_er||0)+'</td><td class="n '+(v.outliers?'hot':'')+'">'+(v.outliers||0)+'</td><td class=n>'+(v.per_week||'')+'</td></tr>').join('')}
+document.querySelectorAll('th[data-a]').forEach(t=>t.onclick=()=>{ad=ak==t.dataset.a?-ad:-1;ak=t.dataset.a;adraw()});['aq','an','ag','al','ax','aa','af'].forEach(i=>$(i).oninput=adraw);adraw();
 ['q','acc','pf','out','w'].forEach(i=>$(i).oninput=draw);$('sub').textContent='Обновлено __WHEN__. Клик по заголовку столбца сортирует.';draw()</script>"""
 
 
@@ -396,7 +442,8 @@ def cmd_dash(a):
     db = load_db(); rescore(db)
     data = json.dumps(list(db["videos"].values()), ensure_ascii=False).replace("</", "<\\/")
     out = HOME / "dashboard.html"
-    out.write_text(PAGE.replace("__DATA__", data).replace("__WHEN__", html.escape(dt.datetime.now().strftime("%d.%m.%Y %H:%M"))), "utf-8")
+    accs = json.dumps(list(db["accounts"].values()), ensure_ascii=False).replace("</", "<\\/")
+    out.write_text(PAGE.replace("__ACC__", accs).replace("__DATA__", data).replace("__WHEN__", html.escape(dt.datetime.now().strftime("%d.%m.%Y %H:%M"))), "utf-8")
     print(f"[radar] {out} ({len(db['videos'])} публикаций)")
 
 
@@ -410,9 +457,12 @@ def main():
     s.add_argument("--full", action="store_true", help="запрос на каждый ролик: даты и лайки, но выше риск блокировки")
     g = sub.add_parser("ingest"); g.add_argument("file")
     pc = sub.add_parser("pics"); pc.add_argument("name"); pc.add_argument("urls", nargs="*"); pc.add_argument("--file")
+    tg = sub.add_parser("tag"); tg.add_argument("username")
+    for k in ("niche", "geo", "lang", "gender", "age", "kind", "note"):
+        tg.add_argument("--" + k)
     sub.add_parser("dash")
     a = ap.parse_args()
-    {"watch": cmd_watch, "scan": cmd_scan, "ingest": cmd_ingest, "pics": cmd_pics, "dash": cmd_dash}[a.cmd](a)
+    {"watch": cmd_watch, "scan": cmd_scan, "ingest": cmd_ingest, "pics": cmd_pics, "tag": cmd_tag, "dash": cmd_dash}[a.cmd](a)
 
 
 if __name__ == "__main__":
