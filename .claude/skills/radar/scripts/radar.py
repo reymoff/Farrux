@@ -3,6 +3,7 @@
 
   radar.py watch <url|файл> [--frames 24] [--lang ru] [--no-audio]
   radar.py scan  <url канала или @ник IG> [--limit 30]
+  radar.py ingest <json из Graph API business_discovery>
   radar.py dash
 
 Всё складывает в ./radar (или $RADAR_HOME). Платных API нет.
@@ -60,7 +61,8 @@ def row(info, url=None):
     link = info.get("webpage_url") or info.get("url") or url or ""
     return {
         "id": str(info.get("id")), "url": link, "platform": platform(link),
-        "account": info.get("uploader_id") or info.get("channel") or info.get("uploader") or "",
+        "account": (info.get("channel") if platform(link) == "instagram" else None) or info.get("uploader_id")
+                   or info.get("channel") or info.get("uploader") or "",
         "title": (info.get("title") or info.get("description") or "")[:200],
         "caption": (info.get("description") or "")[:1500],
         "date": f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 else "",
@@ -165,7 +167,12 @@ def transcript(url, video, out, lang, is_url):
     for dev, ct in (("auto", "auto"), ("cpu", "int8")):  # видеокарта, потом процессор
         try:
             model = WhisperModel(name, device=dev, compute_type=ct)
-            segs, info = model.transcribe(str(video), language=None if lang == "auto" else lang, vad_filter=True)
+            import numpy as np  # звук достаём ffmpeg-ом: не зависим от версии PyAV
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
+                                 capture_output=True).stdout
+            if not raw:
+                return "", "в ролике нет звуковой дорожки"
+            segs, info = model.transcribe(np.frombuffer(raw, np.float32), language=None if lang == "auto" else lang, vad_filter=True)
             text = "\n".join(f"[{int(s.start // 60):02d}:{int(s.start % 60):02d}] {s.text.strip()}" for s in segs)
             return text, f"whisper {name} ({info.language})"
         except Exception as e:
@@ -264,6 +271,29 @@ def cmd_scan(a):
         print(f"  x{v['outlier']:<6} {v['views']:>9} просм  ER {v['er']:>5}%  {v['date']}  {v['url']}  {v['title'][:60]}")
 
 
+def cmd_ingest(a):
+    """Лента Instagram из официального Graph API (business_discovery), сохранённая в json-файл."""
+    d = json.loads(Path(a.file).read_text("utf-8"))
+    bd = d.get("business_discovery") or d
+    rows = []
+    for m in (bd.get("media") or {}).get("data", []):
+        code = m.get("permalink", "").rstrip("/").split("/")[-1] or m["id"]
+        rows.append({"id": code, "url": m.get("permalink", ""), "platform": "instagram", "account": bd.get("username", ""),
+                     "title": (m.get("caption") or "")[:200], "caption": (m.get("caption") or "")[:1500],
+                     "date": (m.get("timestamp") or "")[:10], "duration": 0, "views": m.get("view_count") or 0,
+                     "likes": m.get("like_count") or 0, "comments": m.get("comments_count") or 0,
+                     "followers": bd.get("followers_count") or 0,
+                     "kind": (m.get("media_product_type") or m.get("media_type") or "").lower()})
+    db = load_db()
+    for r in rows:
+        upsert(db, r)
+    rescore(db); save_db(db)
+    top = sorted((v for v in db["videos"].values() if v["account"] == bd.get("username")), key=lambda v: -v.get("outlier", 0))
+    print(f"[radar] {bd.get('username')}: подписчиков {bd.get('followers_count')}, в базе {len(top)} публикаций. Топ по выбросу:")
+    for v in top[:10]:
+        print(f"  x{v['outlier']:<6} {v['views']:>9} просм  {v['likes']:>7} лайк  {v['date']}  {v['url']}  {v['title'][:50]}")
+
+
 # ---------- dash: один html-файл с фильтрами ----------
 
 PAGE = """<!doctype html><html lang=ru><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -324,9 +354,10 @@ def main():
     w.add_argument("--lang", default="ru"); w.add_argument("--no-audio", action="store_true"); w.add_argument("--keep", action="store_true")
     s = sub.add_parser("scan"); s.add_argument("target"); s.add_argument("--limit", type=int, default=30); s.add_argument("--shorts", action="store_true")
     s.add_argument("--full", action="store_true", help="запрос на каждый ролик: даты и лайки, но выше риск блокировки")
+    g = sub.add_parser("ingest"); g.add_argument("file")
     sub.add_parser("dash")
     a = ap.parse_args()
-    {"watch": cmd_watch, "scan": cmd_scan, "dash": cmd_dash}[a.cmd](a)
+    {"watch": cmd_watch, "scan": cmd_scan, "ingest": cmd_ingest, "dash": cmd_dash}[a.cmd](a)
 
 
 if __name__ == "__main__":
