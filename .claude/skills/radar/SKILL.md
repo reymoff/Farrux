@@ -15,20 +15,23 @@ description: Глаза и уши для анализа конкурентов �
 |---|---|---|
 | YouTube: ролик | `watch`: раскадровка площадки (320x180, кадр раз в 2 сек, см. `frames.txt`) + субтитры + цифры | сам видеофайл облаку не отдаётся (проверка на бота), обходить её нельзя |
 | YouTube: канал | `scan`: один лёгкий запрос, просмотры и длительность | `--full` быстро упирается в проверку на бота |
-| Instagram: лента аккаунта | Graph API, см. ниже | только бизнес- и авторские аккаунты; около 200 запросов в час |
-| Instagram: рилс | `watch <ссылка>`: видео, чёткие кадры, Whisper | анонимно отдаёт несколько роликов, потом просит вход. Тогда `vidiq_watch_shortform_content` (10 кредитов) |
+| Instagram: лента и рилсы | официальный API, см. ниже: цифры, видео, кадры, звук | только бизнес- и авторские аккаунты |
+| Instagram: рилс по ссылке без API | `watch <ссылка>` | анонимно отдаёт несколько роликов, потом просит вход |
 
-## Лента Instagram через официальный API
+## Instagram через официальный API (основной путь)
 
-Бесплатно, без риска для аккаунта. Идёт через коннектор владельца `mcp__ai-targetolog__meta_read`:
+Бесплатно, без входа в Instagram, без риска для аккаунта. Проверено: лента, цифры, кадры и расшифровка речи рилса.
 
-- `path`: `17841404159420949` (Instagram-аккаунт владельца farrux_reymoff, от его имени идёт запрос)
-- `params.fields`: `business_discovery.username(НИК){username,followers_count,media_count,media.limit(30){id,permalink,media_type,media_product_type,like_count,comments_count,view_count,timestamp,caption,media_url,thumbnail_url}}`
-- Следующая страница: `media.limit(30).after(КУРСОР)`.
+**Чужой аккаунт (конкурент).** Инструмент `mcp__ai-targetolog__ig_radar`:
+1. `{username, limit: 30}`: компактная лента: код, тип, дата, просмотры, лайки, комментарии, начало подписи, `has_video`. Сохранить ответ в json и выполнить `radar.py ingest файл.json`.
+2. Выбрать ролики с выбросом от x3 и вызвать `{username, limit, video_for: [коды]}`: в `videos` придут прямые ссылки на mp4.
+3. `radar.py watch https://www.instagram.com/reel/КОД/ --src "ССЫЛКА" --lang ru`: чёткие кадры, хук, Whisper.
 
-Ответ сохранить в json-файл и выполнить `radar.py ingest файл.json`. В ответе есть просмотры рилсов, лайки, комментарии, подписи и даты. Ошибка про отсутствие аккаунта значит, что он личный, а не бизнес: тогда только `vidiq_ig_profile_reels`.
+Если `ig_radar` ещё не виден в сессии, то же самое даёт `meta_read`: path `17841404159420949`, fields `business_discovery.username(НИК){followers_count,media.limit(25){permalink,media_type,media_product_type,like_count,comments_count,view_count,timestamp,caption,media_url}}` (ответ большой, брать малый limit).
 
-Дальше: 3-5 роликов с выбросом от x3 прогнать через `watch`.
+Ограничения площадки: только бизнес- и авторские аккаунты; около 200 запросов в час; у рилсов с чужой лицензионной музыкой видеофайла нет (`has_video: false`), тогда `watch` по ссылке или vidIQ; сохранения, репосты и охваты чужих роликов Meta не отдаёт никому.
+
+**Свой и клиентские аккаунты.** Полная статистика через `meta_read`: path `<ig_id>/media`, fields `permalink,media_product_type,timestamp,caption,media_url,like_count,comments_count,insights.metric(reach,views,saved,shares,total_interactions)`. Список аккаунтов и их id: `me/accounts` с `fields=name,instagram_business_account{id,username}`.
 
 ## Команды
 
