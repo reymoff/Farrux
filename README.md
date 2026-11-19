@@ -12,6 +12,18 @@
 | 6 | [video-use](https://github.com/browser-use/video-use) | режет сырое видео по расшифровке | скилл, нужен `ELEVENLABS_API_KEY` в `~/video-use/.env` |
 | 7 | [frontend-design](https://github.com/anthropics/claude-plugins-official) | выразительные кадры и страницы | плагин |
 
+## Радар конкурентов
+
+Скилл `radar` (`.claude/skills/radar`): Claude смотрит ролик кадрами с таймкодами и слушает через субтитры или локальный Whisper, парсит ленту канала, считает выбросы, собирает дашборд. Бесплатно, без ключей. Запускать на своём компьютере: в облаке YouTube и Instagram закрыты.
+
+```bash
+python .claude/skills/radar/scripts/radar.py watch https://www.instagram.com/reel/XXXX/
+python .claude/skills/radar/scripts/radar.py scan https://www.youtube.com/@канал --limit 30
+python .claude/skills/radar/scripts/radar.py dash   # radar/dashboard.html
+```
+
+В чате проще: "посмотри этот рилс" или "разбери канал конкурента", скилл подхватится сам.
+
 ## Шаблон рилса KaraPro
 
 `reels-karapro/`: готовый ролик на Remotion в стиле KaraPro, тексты меняются без кода. Подробности в его README.

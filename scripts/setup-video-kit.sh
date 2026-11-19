@@ -23,4 +23,7 @@ V="$HOME/video-use"
 [ -d "$V/.venv" ] || (cd "$V" && uv sync -q) || log "fail: video-use deps"
 [ -f "$V/.env" ] || cp "$V/.env.example" "$V/.env"
 mkdir -p "$S" && ln -sfn "$V" "$S/video-use"
+# radar: глаза и уши для анализа конкурентов (.claude/skills/radar)
+python3 -c "import yt_dlp, faster_whisper, instaloader" 2>/dev/null || pip install -q yt-dlp faster-whisper instaloader >/dev/null 2>&1 || log "fail: radar deps"
+command -v ffmpeg >/dev/null || log "нет ffmpeg: winget install ffmpeg / brew install ffmpeg / apt install ffmpeg"
 log "ok"
