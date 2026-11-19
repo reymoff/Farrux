@@ -24,6 +24,6 @@ V="$HOME/video-use"
 [ -f "$V/.env" ] || cp "$V/.env.example" "$V/.env"
 mkdir -p "$S" && ln -sfn "$V" "$S/video-use"
 # radar: глаза и уши для анализа конкурентов (.claude/skills/radar)
-python3 -c "import yt_dlp, faster_whisper, instaloader" 2>/dev/null || pip install -q yt-dlp faster-whisper instaloader >/dev/null 2>&1 || log "fail: radar deps"
+python3 -c "import yt_dlp, faster_whisper, instaloader, openpyxl, reportlab" 2>/dev/null || pip install -q yt-dlp faster-whisper instaloader openpyxl reportlab >/dev/null 2>&1 || log "fail: radar deps"
 command -v ffmpeg >/dev/null || log "нет ffmpeg: winget install ffmpeg / brew install ffmpeg / apt install ffmpeg"
 log "ok"

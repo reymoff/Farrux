@@ -378,6 +378,114 @@ def cmd_tag(a):
     print(json.dumps(acc, ensure_ascii=False))
 
 
+ACC_COLS = [("username", "Аккаунт"), ("name", "Имя"), ("niche", "Ниша"), ("geo", "Гео"), ("lang", "Язык"), ("gender", "Пол"),
+            ("age", "Возраст"), ("kind", "Тип"), ("followers", "Подписчики"), ("median_views", "Медиана просмотров"),
+            ("avg_er", "ER %"), ("outliers", "Выбросов от x3"), ("per_week", "Публикаций в неделю"), ("posts", "В базе"),
+            ("url", "Ссылка"), ("bio", "Био"), ("note", "Заметка")]
+VID_COLS = [("account", "Аккаунт"), ("platform", "Площадка"), ("date", "Дата"), ("kind", "Формат"), ("views", "Просмотры"),
+            ("outlier", "Выброс x"), ("er", "ER %"), ("likes", "Лайки"), ("comments", "Комментарии"), ("duration", "Сек"),
+            ("url", "Ссылка"), ("title", "Подпись"), ("notes", "Разбор"), ("transcript", "Транскрипт")]
+
+
+def cmd_export(a):
+    """Выгрузка базы: xlsx, csv, pdf, md, json. --report файл.md добавляет в PDF и md текст разбора."""
+    db = load_db(); rescore(db)
+    pick = set(x.lstrip("@") for x in a.accounts) if a.accounts else None
+    accs = sorted((x for x in db["accounts"].values() if not pick or x.get("username") in pick), key=lambda x: -(x.get("median_views") or 0))
+    vids = sorted((v for v in db["videos"].values() if not pick or v["account"] in pick), key=lambda v: -(v.get("outlier") or 0))
+    hot = [v for v in vids if (v.get("outlier") or 0) >= 3]
+    report = Path(a.report).read_text("utf-8") if a.report else ""
+    out = HOME / "export"; out.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y-%m-%d")
+    base = out / f"radar_{a.name or stamp}"
+    rows = lambda items, cols: [[("" if x.get(k) is None else x.get(k)) for k, _ in cols] for x in items]
+    done, fmts = [], ["xlsx", "csv", "pdf", "md", "json"] if a.format == "all" else a.format.split(",")
+    if "json" in fmts:
+        base.with_suffix(".json").write_text(json.dumps({"accounts": accs, "videos": vids}, ensure_ascii=False, indent=1), "utf-8")
+        done.append(base.with_suffix(".json"))
+    if "csv" in fmts:
+        import csv
+        for tag, items, cols in (("accounts", accs, ACC_COLS), ("posts", vids, VID_COLS)):
+            f = Path(f"{base}_{tag}.csv")
+            with f.open("w", newline="", encoding="utf-8-sig") as fh:  # BOM, чтобы Excel открыл кириллицу
+                w = csv.writer(fh, delimiter=";"); w.writerow([t for _, t in cols]); w.writerows(rows(items, cols))
+            done.append(f)
+    if "xlsx" in fmts:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        wb = Workbook(); wb.remove(wb.active)
+        for title, items, cols in (("Аккаунты", accs, ACC_COLS), ("Залетевшие", hot, VID_COLS), ("Все публикации", vids, VID_COLS)):
+            ws = wb.create_sheet(title); ws.append([t for _, t in cols])
+            for r in rows(items, cols):
+                ws.append([str(c)[:32000] if isinstance(c, str) else c for c in r])
+            for c in ws[1]:
+                c.font = Font(bold=True, color="FFFFFF"); c.fill = PatternFill("solid", fgColor="C2410C")
+                c.alignment = Alignment(vertical="center", wrap_text=True)
+            for i, (k, _) in enumerate(cols, 1):
+                ws.column_dimensions[ws.cell(1, i).column_letter].width = 50 if k in ("bio", "title", "notes", "transcript", "note") else 34 if k == "url" else 16
+            ws.freeze_panes = "B2"; ws.auto_filter.ref = ws.dimensions
+        if report:
+            ws = wb.create_sheet("Разбор", 0); ws.column_dimensions["A"].width = 120
+            for ln in report.splitlines():
+                ws.append([ln]); ws.cell(ws.max_row, 1).alignment = Alignment(wrap_text=True, vertical="top")
+        wb.save(base.with_suffix(".xlsx")); done.append(base.with_suffix(".xlsx"))
+    md = [f"# Радар конкурентов, {stamp}", ""]
+    if report:
+        md += [report, ""]
+    md += ["## Аккаунты", "", "| Аккаунт | Ниша | Гео | Язык | Подписчики | Медиана просм. | ER % | Выбросов | В неделю |", "|---|---|---|---|---|---|---|---|---|"]
+    md += [f"| {x.get('username','')} | {x.get('niche','')} | {x.get('geo','')} | {x.get('lang','')} | {x.get('followers',0)} | {x.get('median_views',0)} | {x.get('avg_er',0)} | {x.get('outliers',0)} | {x.get('per_week','')} |" for x in accs]
+    md += ["", "## Залетевшие (выброс от x3)", "", "| Аккаунт | Дата | Просмотры | Выброс | ER % | Ссылка |", "|---|---|---|---|---|---|"]
+    md += [f"| {v['account']} | {v.get('date','')} | {v.get('views',0)} | x{v.get('outlier',0)} | {v.get('er',0)} | {v.get('url','')} |" for v in hot[:50]]
+    if "md" in fmts:
+        base.with_suffix(".md").write_text("\n".join(md), "utf-8"); done.append(base.with_suffix(".md"))
+    if "pdf" in fmts:
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4, landscape
+            from reportlab.lib.styles import ParagraphStyle
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+            from xml.sax.saxutils import escape
+            font = next((f for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/Library/Fonts/Arial Unicode.ttf",
+                                     "C:/Windows/Fonts/arial.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf") if Path(f).exists()), None)
+            if not font:
+                raise RuntimeError("нет шрифта с кириллицей")
+            pdfmetrics.registerFont(TTFont("R", font))
+            bold = font.replace("DejaVuSans.ttf", "DejaVuSans-Bold.ttf").replace("arial.ttf", "arialbd.ttf")
+            pdfmetrics.registerFont(TTFont("RB", bold if Path(bold).exists() else font))
+            P = ParagraphStyle("p", fontName="R", fontSize=9, leading=12.5)
+            H = ParagraphStyle("h", fontName="RB", fontSize=14, leading=18, spaceBefore=10, spaceAfter=6)
+            T = ParagraphStyle("t", fontName="R", fontSize=7.5, leading=9.5)
+            def table(head, data, widths):
+                t = Table([[Paragraph(f"<b>{escape(str(h))}</b>", T) for h in head]] + [[Paragraph(escape(str(c))[:300], T) for c in r] for r in data],
+                          colWidths=widths, repeatRows=1)
+                t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3d9cc")), ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+                                       ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+                return t
+            flow = [Paragraph(f"Радар конкурентов, {stamp}", ParagraphStyle("tt", fontName="RB", fontSize=18, leading=22)), Spacer(1, 8)]
+            for ln in report.splitlines():
+                if ln.startswith("#"):
+                    flow.append(Paragraph(escape(ln.lstrip("# ")), H))
+                elif ln.strip():
+                    flow.append(Paragraph(re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escape(ln)), P))
+                else:
+                    flow.append(Spacer(1, 4))
+            flow.append(Paragraph("Аккаунты", H))
+            flow.append(table(["Аккаунт", "Ниша", "Гео", "Язык", "Подписчики", "Медиана", "ER %", "Выбросов", "В нед."],
+                              [[x.get("username", ""), x.get("niche", ""), x.get("geo", ""), x.get("lang", ""), x.get("followers", 0), x.get("median_views", 0),
+                                x.get("avg_er", 0), x.get("outliers", 0), x.get("per_week", "")] for x in accs], [110, 90, 80, 45, 70, 70, 45, 55, 45]))
+            flow.append(Paragraph("Залетевшие ролики (выброс от x3)", H))
+            flow.append(table(["Аккаунт", "Дата", "Просмотры", "Выброс", "ER %", "Подпись", "Ссылка"],
+                              [[v["account"], v.get("date", ""), v.get("views", 0), f"x{v.get('outlier', 0)}", v.get("er", 0), v.get("title", "")[:120], v.get("url", "")]
+                               for v in hot[:60]], [90, 55, 65, 45, 40, 260, 210]))
+            SimpleDocTemplate(str(base.with_suffix(".pdf")), pagesize=landscape(A4), leftMargin=28, rightMargin=28, topMargin=28, bottomMargin=28).build(flow)
+            done.append(base.with_suffix(".pdf"))
+        except Exception as e:
+            print(f"[radar] PDF не собрался: {e}. Поставь: pip install reportlab")
+    print(json.dumps({"аккаунтов": len(accs), "публикаций": len(vids), "залетевших": len(hot), "файлы": [str(f) for f in done]}, ensure_ascii=False, indent=1))
+
+
 # ---------- dash: один html-файл с фильтрами ----------
 
 PAGE = """<!doctype html><html lang=ru><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -460,9 +568,11 @@ def main():
     tg = sub.add_parser("tag"); tg.add_argument("username")
     for k in ("niche", "geo", "lang", "gender", "age", "kind", "note"):
         tg.add_argument("--" + k)
+    ex = sub.add_parser("export"); ex.add_argument("--format", default="all", help="xlsx,csv,pdf,md,json или all")
+    ex.add_argument("--accounts", nargs="*", default=[]); ex.add_argument("--report"); ex.add_argument("--name")
     sub.add_parser("dash")
     a = ap.parse_args()
-    {"watch": cmd_watch, "scan": cmd_scan, "ingest": cmd_ingest, "pics": cmd_pics, "tag": cmd_tag, "dash": cmd_dash}[a.cmd](a)
+    {"watch": cmd_watch, "scan": cmd_scan, "ingest": cmd_ingest, "pics": cmd_pics, "tag": cmd_tag, "export": cmd_export, "dash": cmd_dash}[a.cmd](a)
 
 
 if __name__ == "__main__":
