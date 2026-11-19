@@ -82,13 +82,16 @@ def rescore(db):
         by.setdefault(v["account"], []).append(v["views"])
     for v in db["videos"].values():
         med = statistics.median([x for x in by[v["account"]] if x] or [0])
-        v["outlier"] = round(v["views"] / med, 2) if med else 0
+        v["outlier"] = v["server_outlier"] if v.get("server_outlier") is not None else (round(v["views"] / med, 2) if med else 0)
         v["er"] = round((v["likes"] + v["comments"]) / v["views"] * 100, 2) if v["views"] else 0
     for name, vs in by.items():  # сводка по аккаунту для таблицы конкурентов
         if not name:
             continue
         mine = [v for v in db["videos"].values() if v["account"] == name]
         acc = db.setdefault("accounts", {}).setdefault(name, {"username": name})
+        if acc.get("server"):  # цифры сервера посчитаны по полной ленте, локальные их не перетирают
+            acc["posts"] = len(mine)
+            continue
         dates = sorted(v["date"] for v in mine if v.get("date"))
         weeks = 1
         if len(dates) > 1:
@@ -128,6 +131,12 @@ def sheets(video, out, dur, n):
          "-q:v", "3", str(out / "big_start_%02d.jpg")], check=False)
     run(["ffmpeg", "-y", "-v", "error", "-sseof", "-2.5", "-i", str(video), "-vf", "fps=1,scale=720:-2",
          "-q:v", "3", str(out / "big_end_%02d.jpg")], check=False)
+    # Склейки: кадр на каждую смену плана. Даёт число склеек и ловит быстрые титры между точками выборки.
+    p = run(["ffmpeg", "-y", "-v", "info", "-i", str(video), "-vf", f"select='gt(scene,0.28)',showinfo,scale=360:-2,{stamp}tile=4x3",
+             "-vsync", "vfr", "-q:v", "4", str(out / "cuts_%02d.jpg")], check=False)
+    times = [float(t) for t in re.findall(r"pts_time:([0-9.]+)", p.stderr)]
+    (out / "cuts.json").write_text(json.dumps({"cuts": len(times), "times": [round(t, 2) for t in times],
+                                               "avg_shot_sec": round(dur / (len(times) + 1), 2)}), "utf-8")
     return sorted(x.name for x in out.glob("*.jpg"))
 
 
@@ -240,12 +249,19 @@ def cmd_watch(a):
     text, how = ("", "выключено") if a.no_audio else transcript(src, video, out, a.lang, is_url and not a.src, a.model)
     (out / "transcript.txt").write_text(text, "utf-8")
     r.update(watched=True, dir=str(out), transcript=text[:6000])
+    cj = out / "cuts.json"
+    if cj.exists():
+        c = json.loads(cj.read_text("utf-8")); r.update(cuts=c["cuts"], avg_shot_sec=c["avg_shot_sec"])
+    words = len(re.findall(r"[^\W\d_]+", re.sub(r"\[\d\d:\d\d\]", "", text)))
+    if words and r.get("duration"):
+        r["words_per_min"] = round(words / r["duration"] * 60)
     (out / "meta.json").write_text(json.dumps(r, ensure_ascii=False, indent=1), "utf-8")
     db = load_db(); upsert(db, r); rescore(db); save_db(db)
     if is_url and video and not a.keep:
         video.unlink(missing_ok=True)
     print(json.dumps({"папка": str(out), "режим": mode, "кадры": frames, "шаг_кадров_сек": step,
-                      "транскрипт": how, "символов": len(text),
+                      "транскрипт": how, "символов": len(text), "склеек": r.get("cuts"), "средний_план_сек": r.get("avg_shot_sec"),
+                      "слов_в_минуту": r.get("words_per_min"),
                       "мета": {k: r[k] for k in ("account", "title", "date", "duration", "views", "likes", "comments")}},
                      ensure_ascii=False, indent=1))
     print("\nДальше: открой Read-ом все jpg из папки (и frames.txt, если есть), прочитай transcript.txt.")
@@ -304,9 +320,35 @@ def cmd_scan(a):
         print(f"  x{v['outlier']:<6} {v['views']:>9} просм  ER {v['er']:>5}%  {v['date']}  {v['url']}  {v['title'][:60]}")
 
 
+def ingest_server(d):
+    """Ответы серверных инструментов radar_sync, radar_list, radar_top: кладём в локальную базу для выгрузки."""
+    db = load_db()
+    accs = d.get("accounts", []) if isinstance(d, dict) else [x for x in d if "code" not in x]
+    posts = [] if isinstance(d, dict) else [x for x in d if "code" in x]
+    for acc in accs:
+        u = acc["username"]
+        db["accounts"].setdefault(u, {"username": u}).update({k: v for k, v in acc.items() if k != "top" and v not in (None, "")})
+        db["accounts"][u]["server"] = True
+        db["accounts"][u].setdefault("url", f"https://www.instagram.com/{u}/")
+        posts += [{**t, "username": u} for t in acc.get("top", [])]
+    for x in posts:
+        typ = x.get("type", "")
+        upsert(db, {"id": x["code"], "url": f"https://www.instagram.com/{'reel' if typ == 'reels' else 'p'}/{x['code']}/", "platform": "instagram",
+                    "account": x.get("username", ""), "title": x.get("caption", ""), "caption": x.get("caption", ""),
+                    "date": str(x.get("posted_at") or x.get("date") or "")[:10], "duration": x.get("duration") or 0, "views": x.get("views") or 0,
+                    "likes": x.get("likes") or 0, "comments": x.get("comments") or 0, "followers": 0, "kind": typ,
+                    "hook": x.get("hook") or "", "hook_type": x.get("hook_type") or "", "notes": x.get("analysis") or ""})
+        if x.get("outlier") is not None:
+            db["videos"][x["code"]]["server_outlier"] = x["outlier"]
+    rescore(db); save_db(db)
+    print(f"[radar] в базе: аккаунтов {len(db['accounts'])}, публикаций {len(db['videos'])}")
+
+
 def cmd_ingest(a):
     """Лента Instagram из официального Graph API (business_discovery), сохранённая в json-файл."""
     d = json.loads(Path(a.file).read_text("utf-8"))
+    if isinstance(d, list) or (isinstance(d, dict) and isinstance(d.get("accounts"), list)):
+        return ingest_server(d)
     bd = d.get("business_discovery") or d
     rows = []
     for m in bd.get("items") or []:  # компактный формат инструмента ig_radar
@@ -386,8 +428,11 @@ ACC_COLS = [("username", "Аккаунт"), ("name", "Имя"), ("niche", "Ни�
             ("age", "Возраст"), ("kind", "Тип"), ("followers", "Подписчики"), ("median_views", "Медиана просмотров"),
             ("avg_er", "ER %"), ("outliers", "Выбросов от x3"), ("per_week", "Публикаций в неделю"), ("posts", "В базе"),
             ("url", "Ссылка"), ("bio", "Био"), ("note", "Заметка")]
+HOOK_COLS = [("account", "Аккаунт"), ("hook", "Хук дословно"), ("hook_type", "Тип хука"), ("views", "Просмотры"), ("outlier", "Выброс x"),
+             ("date", "Дата"), ("url", "Ссылка")]
 VID_COLS = [("account", "Аккаунт"), ("platform", "Площадка"), ("date", "Дата"), ("kind", "Формат"), ("views", "Просмотры"),
             ("outlier", "Выброс x"), ("er", "ER %"), ("likes", "Лайки"), ("comments", "Комментарии"), ("duration", "Сек"),
+            ("cuts", "Склеек"), ("words_per_min", "Слов в минуту"), ("hook", "Хук"), ("hook_type", "Тип хука"),
             ("url", "Ссылка"), ("title", "Подпись"), ("notes", "Разбор"), ("transcript", "Транскрипт")]
 
 
@@ -418,7 +463,8 @@ def cmd_export(a):
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment
         wb = Workbook(); wb.remove(wb.active)
-        for title, items, cols in (("Аккаунты", accs, ACC_COLS), ("Залетевшие", hot, VID_COLS), ("Все публикации", vids, VID_COLS)):
+        for title, items, cols in (("Аккаунты", accs, ACC_COLS), ("Залетевшие", hot, VID_COLS),
+                                   ("Хуки", [v for v in vids if v.get("hook")], HOOK_COLS), ("Все публикации", vids, VID_COLS)):
             ws = wb.create_sheet(title); ws.append([t for _, t in cols])
             for r in rows(items, cols):
                 ws.append([str(c)[:32000] if isinstance(c, str) else c for c in r])
