@@ -183,7 +183,12 @@ def transcript(url, video, out, lang, is_url):
 def cmd_watch(a):
     need("ffmpeg")
     src, is_url = a.target, re.match(r"https?://", a.target) is not None
-    if is_url:
+    info = {}
+    if is_url and a.src:  # прямой файл из официального API: площадку не трогаем, цифры берём из базы
+        code = src.rstrip("/").split("/")[-1]
+        r = dict(load_db()["videos"].get(code) or {"id": code, "url": src, "platform": platform(src), "account": "",
+                 "title": "", "caption": "", "date": "", "duration": 0, "views": 0, "likes": 0, "comments": 0, "followers": 0})
+    elif is_url:
         info = json.loads(ytdlp("-J", "--no-playlist", src).stdout)
         r = row(info, src)
     else:
@@ -192,7 +197,11 @@ def cmd_watch(a):
     out = HOME / "watch" / re.sub(r"[^\w.-]", "_", r["id"])
     out.mkdir(parents=True, exist_ok=True)
     video, mode, step = Path(src), "видео", 0
-    if is_url:
+    if is_url and a.src:
+        req = urllib.request.Request(a.src, headers={"User-Agent": "Mozilla/5.0"})
+        (out / "video.mp4").write_bytes(urllib.request.urlopen(req, timeout=120).read())
+        video = out / "video.mp4"
+    elif is_url:
         p = ytdlp("-f", "bv*[height<=720]+ba/b[height<=720]/b", "--merge-output-format", "mp4", "--no-playlist",
                   "-o", str(out / "video.%(ext)s"), src, check=False)
         got = [x for x in out.glob("video.*") if x.suffix != ".part"]
@@ -204,7 +213,7 @@ def cmd_watch(a):
     else:
         mode = "раскадровка площадки (видео-хост закрыт или ролик не отдался)"
         frames, step = storyboard(info, out, a.frames)
-    text, how = ("", "выключено") if a.no_audio else transcript(src, video, out, a.lang, is_url)
+    text, how = ("", "выключено") if a.no_audio else transcript(src, video, out, a.lang, is_url and not a.src)
     (out / "transcript.txt").write_text(text, "utf-8")
     r.update(watched=True, dir=str(out), transcript=text[:6000])
     (out / "meta.json").write_text(json.dumps(r, ensure_ascii=False, indent=1), "utf-8")
@@ -276,12 +285,20 @@ def cmd_ingest(a):
     d = json.loads(Path(a.file).read_text("utf-8"))
     bd = d.get("business_discovery") or d
     rows = []
+    for m in bd.get("items") or []:  # компактный формат инструмента ig_radar
+        rows.append({"id": m["code"], "url": f"https://www.instagram.com/{'reel' if m.get('type') == 'reels' else 'p'}/{m['code']}/",
+                     "platform": "instagram", "account": bd.get("username", ""), "title": m.get("caption", ""),
+                     "caption": m.get("caption", ""), "date": m.get("date", ""), "duration": 0, "views": m.get("views") or 0,
+                     "likes": m.get("likes") or 0, "comments": m.get("comments") or 0, "followers": bd.get("followers") or 0,
+                     "kind": m.get("type", ""), "has_video": bool(m.get("has_video"))})
+    bd.setdefault("followers_count", bd.get("followers"))
     for m in (bd.get("media") or {}).get("data", []):
         code = m.get("permalink", "").rstrip("/").split("/")[-1] or m["id"]
         rows.append({"id": code, "url": m.get("permalink", ""), "platform": "instagram", "account": bd.get("username", ""),
                      "title": (m.get("caption") or "")[:200], "caption": (m.get("caption") or "")[:1500],
                      "date": (m.get("timestamp") or "")[:10], "duration": 0, "views": m.get("view_count") or 0,
                      "likes": m.get("like_count") or 0, "comments": m.get("comments_count") or 0,
+                     "shares": m.get("shares") or 0, "saves": m.get("saved") or 0, "reach": m.get("reach") or 0,
                      "followers": bd.get("followers_count") or 0,
                      "kind": (m.get("media_product_type") or m.get("media_type") or "").lower()})
     db = load_db()
@@ -352,6 +369,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     w = sub.add_parser("watch"); w.add_argument("target"); w.add_argument("--frames", type=int, default=24)
     w.add_argument("--lang", default="ru"); w.add_argument("--no-audio", action="store_true"); w.add_argument("--keep", action="store_true")
+    w.add_argument("--src", help="прямая ссылка на mp4 (media_url из Graph API)")
     s = sub.add_parser("scan"); s.add_argument("target"); s.add_argument("--limit", type=int, default=30); s.add_argument("--shorts", action="store_true")
     s.add_argument("--full", action="store_true", help="запрос на каждый ролик: даты и лайки, но выше риск блокировки")
     g = sub.add_parser("ingest"); g.add_argument("file")
