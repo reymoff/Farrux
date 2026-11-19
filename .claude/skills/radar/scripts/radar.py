@@ -316,6 +316,37 @@ def cmd_ingest(a):
         print(f"  x{v['outlier']:<6} {v['views']:>9} просм  {v['likes']:>7} лайк  {v['date']}  {v['url']}  {v['title'][:50]}")
 
 
+def cmd_pics(a):
+    """Скачивает картинки по ссылкам (аватар, обложки, слайды каруселей) и клеит в листы 4x3 для просмотра."""
+    need("ffmpeg")
+    out = HOME / "pics" / re.sub(r"[^\w.-]", "_", a.name)
+    out.mkdir(parents=True, exist_ok=True)
+    urls = list(a.urls)
+    if a.file:  # json: {"подпись": "ссылка" | ["ссылки"]} или просто список ссылок
+        d = json.loads(Path(a.file).read_text("utf-8"))
+        for k, v in (d.items() if isinstance(d, dict) else enumerate(d)):
+            urls += v if isinstance(v, list) else [v]
+    got = []
+    for i, u in enumerate(urls, 1):
+        f = out / f"p{i:03d}.jpg"
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+            f.write_bytes(urllib.request.urlopen(req, timeout=60).read())
+            got.append(f)
+        except Exception as e:
+            print(f"[radar] не скачалось {i}: {str(e)[:80]}")
+    for n in range(0, len(got), 12):
+        part = got[n:n + 12]
+        ins = [x for f in part for x in ("-i", str(f))]
+        norm = "".join(f"[{i}:v]scale=360:450:force_original_aspect_ratio=decrease,pad=360:450:(ow-iw)/2:(oh-ih)/2[v{i}];" for i in range(len(part)))
+        cols = min(4, len(part)); rows = -(-len(part) // cols)
+        lay = "|".join(f"{(i % cols) * 360}_{(i // cols) * 450}" for i in range(len(part)))
+        graph = norm + "".join(f"[v{i}]" for i in range(len(part))) + f"xstack=inputs={len(part)}:layout={lay}:fill=black[o]" if len(part) > 1 else norm.replace("[v0];", "[o]")
+        run(["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", graph, "-map", "[o]", "-q:v", "4", str(out / f"sheet_{n // 12 + 1:02d}.jpg")], check=False)
+    print(json.dumps({"папка": str(out), "скачано": len(got), "листы": sorted(x.name for x in out.glob("sheet_*.jpg")),
+                      "порядок": "слева направо, сверху вниз, в порядке переданных ссылок"}, ensure_ascii=False, indent=1))
+
+
 # ---------- dash: один html-файл с фильтрами ----------
 
 PAGE = """<!doctype html><html lang=ru><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -378,9 +409,10 @@ def main():
     s = sub.add_parser("scan"); s.add_argument("target"); s.add_argument("--limit", type=int, default=30); s.add_argument("--shorts", action="store_true")
     s.add_argument("--full", action="store_true", help="запрос на каждый ролик: даты и лайки, но выше риск блокировки")
     g = sub.add_parser("ingest"); g.add_argument("file")
+    pc = sub.add_parser("pics"); pc.add_argument("name"); pc.add_argument("urls", nargs="*"); pc.add_argument("--file")
     sub.add_parser("dash")
     a = ap.parse_args()
-    {"watch": cmd_watch, "scan": cmd_scan, "ingest": cmd_ingest, "dash": cmd_dash}[a.cmd](a)
+    {"watch": cmd_watch, "scan": cmd_scan, "ingest": cmd_ingest, "pics": cmd_pics, "dash": cmd_dash}[a.cmd](a)
 
 
 if __name__ == "__main__":
