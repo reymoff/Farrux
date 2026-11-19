@@ -168,10 +168,10 @@ def clean_vtt(text):
     return "\n".join(lines)
 
 
-def transcript(url, video, out, lang, is_url):
+def transcript(url, video, out, lang, is_url, model_name=None):
     """Сначала бесплатные субтитры площадки, потом локальный Whisper."""
     if is_url:
-        ytdlp("--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", f"{lang},{lang}-orig,en",
+        ytdlp("--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", "all,-live_chat" if lang == "auto" else f"{lang},{lang}-orig,en",
               "--sub-format", "vtt", "-o", str(out / "subs"), url, check=False)
         for f in sorted(out.glob("subs*.vtt")):
             t = clean_vtt(f.read_text("utf-8", "ignore"))
@@ -183,7 +183,10 @@ def transcript(url, video, out, lang, is_url):
         from faster_whisper import WhisperModel
     except ImportError:
         return "", "нет faster-whisper (pip install faster-whisper)"
-    name, err = os.environ.get("RADAR_WHISPER_MODEL", "small"), ""
+    # Каракалпакского в Whisper нет: слушаем как казахский (ближайший), результат черновой.
+    wl = {"kaa": "kk", "auto": None}.get(lang, lang)
+    hard = lang in ("uz", "kaa", "kk", "ky", "tg", "tk", "az")  # для этих языков малая модель ошибается, берём среднюю
+    name, err = model_name or os.environ.get("RADAR_WHISPER_MODEL") or ("medium" if hard else "small"), ""
     for dev, ct in (("auto", "auto"), ("cpu", "int8")):  # видеокарта, потом процессор
         try:
             model = WhisperModel(name, device=dev, compute_type=ct)
@@ -192,9 +195,10 @@ def transcript(url, video, out, lang, is_url):
                                  capture_output=True).stdout
             if not raw:
                 return "", "в ролике нет звуковой дорожки"
-            segs, info = model.transcribe(np.frombuffer(raw, np.float32), language=None if lang == "auto" else lang, vad_filter=True)
+            segs, info = model.transcribe(np.frombuffer(raw, np.float32), language=wl, vad_filter=True)
             text = "\n".join(f"[{int(s.start // 60):02d}:{int(s.start % 60):02d}] {s.text.strip()}" for s in segs)
-            return text, f"whisper {name} ({info.language})"
+            note = ", каракалпакский распознан как казахский, сверять с текстом на экране" if lang == "kaa" else ""
+            return text, f"whisper {name}, язык {info.language} ({round(info.language_probability * 100)}%){note}"
         except Exception as e:
             err = str(e)[:200]
     return "", f"whisper не завёлся: {err}"
@@ -233,7 +237,7 @@ def cmd_watch(a):
     else:
         mode = "раскадровка площадки (видео-хост закрыт или ролик не отдался)"
         frames, step = storyboard(info, out, a.frames)
-    text, how = ("", "выключено") if a.no_audio else transcript(src, video, out, a.lang, is_url and not a.src)
+    text, how = ("", "выключено") if a.no_audio else transcript(src, video, out, a.lang, is_url and not a.src, a.model)
     (out / "transcript.txt").write_text(text, "utf-8")
     r.update(watched=True, dir=str(out), transcript=text[:6000])
     (out / "meta.json").write_text(json.dumps(r, ensure_ascii=False, indent=1), "utf-8")
@@ -559,7 +563,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     w = sub.add_parser("watch"); w.add_argument("target"); w.add_argument("--frames", type=int, default=24)
-    w.add_argument("--lang", default="ru"); w.add_argument("--no-audio", action="store_true"); w.add_argument("--keep", action="store_true")
+    w.add_argument("--lang", default="auto", help="auto, ru, uz, kaa, en или любой код Whisper")
+    w.add_argument("--model", help="small, medium, large-v3 или путь к своей модели"); w.add_argument("--no-audio", action="store_true"); w.add_argument("--keep", action="store_true")
     w.add_argument("--src", help="прямая ссылка на mp4 (media_url из Graph API)")
     s = sub.add_parser("scan"); s.add_argument("target"); s.add_argument("--limit", type=int, default=30); s.add_argument("--shorts", action="store_true")
     s.add_argument("--full", action="store_true", help="запрос на каждый ролик: даты и лайки, но выше риск блокировки")
