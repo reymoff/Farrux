@@ -71,6 +71,7 @@ label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4p
     <label>Роль (если игра идёт)<select id="aRole"><option value="civilian">мирный</option><option value="mafia">мафия</option><option value="doctor">доктор</option><option value="commissar">комиссар</option></select></label>
   </div>
   <label>Модель<input id="aModel" list="models"><datalist id="models"></datalist></label>
+  <label>Имя за столом (пусто: по названию нейросети)<input id="aName" placeholder="Например: Яндекс" maxlength="20"></label>
   <label id="aUrlWrap" hidden>Адрес API (совместимый с OpenAI)<input id="aUrl" placeholder="http://localhost:11434/v1/chat/completions"></label>
   <button id="bAdd" class="main">Посадить за стол</button>
   <h2>Правила стола</h2>
@@ -124,7 +125,7 @@ async function callLLM(p, system, user){
     lastCall[p.prov] = Date.now();
     const ac = new AbortController(), t = setTimeout(() => ac.abort(), 90000);
     try {
-      const r = await fetch(url, {method:"POST", headers, signal:ac.signal, body:JSON.stringify({model:p.model, temperature:0.9, max_tokens:1200, seed:Math.floor(Math.random()*1e9),
+      const r = await fetch(url, {method:"POST", headers, signal:ac.signal, body:JSON.stringify({model:p.model, temperature:0.6, max_tokens:1200, seed:Math.floor(Math.random()*1e9),
         messages:[{role:"system",content:system},{role:"user",content:user}]})});
       clearTimeout(t);
       if (!r.ok){
@@ -152,17 +153,30 @@ function parseJSON(txt){
 }
 
 // ============ игра
+const BRANDS = [[/yandex|яндекс/i,"Яндекс","Яндекс"],[/claude/i,"Claude","Anthropic"],[/gemini/i,"Gemini","Google"],[/gemma/i,"Gemma","Google"],[/gpt-oss|openai-fast/i,"GPT-OSS","OpenAI"],[/gpt|openai/i,"ChatGPT","OpenAI"],[/grok/i,"Grok","xAI"],[/deepseek/i,"DeepSeek","DeepSeek"],
+  [/llama/i,"Llama","Meta"],[/qwen/i,"Qwen","Alibaba"],[/mistral|mixtral/i,"Mistral","Mistral AI"],[/nemotron/i,"Nemotron","NVIDIA"],[/ernie/i,"ERNIE","Baidu"],[/kimi/i,"Kimi","Moonshot AI"],[/phi/i,"Phi","Microsoft"],[/granite/i,"Granite","IBM"],
+  [/gigachat/i,"GigaChat","Сбер"],[/ling/i,"Ling","Ant Group"],[/particle/i,"Particle","Particle AI"],[/flint/i,"Flint","Recursive"],[/lfm/i,"Liquid","Liquid AI"]];
+function brandOf(model){ const b = BRANDS.find(x => x[0].test(model)); return b ? {name:b[1], maker:b[2]} : {name:model.split("/").pop().replace(":free","").split(/[-:]/)[0].replace(/^./, c => c.toUpperCase()), maker:""}; }
+function freeName(base){ if (!byName(base)) return base; for (let i = 2; ; i++) if (!byName(base + " " + i)) return base + " " + i; }
 const NAMES = ["Алиса","Борис","Вера","Глеб","Дина","Егор","Жанна","Захар","Инга","Кирилл","Лада","Марк","Нина","Олег","Полина","Роман","Соня","Тимур"];
 const RU = {mafia:"мафия", doctor:"доктор", commissar:"комиссар", civilian:"мирный житель"};
-const RULES = `Ты играешь в настольную игру Мафия. Вокруг стола сидят игроки, все они нейросети разных компаний.
+const RULES = `Ты играешь в настольную игру Мафия. За столом сидят нейросети разных компаний, каждая под своим настоящим именем. Ведущий: человек, его решения окончательны.
 Правила:
 - Роли: мафия (знает своих), доктор, комиссар, мирные жители. Роли скрыты.
 - Ночь: мафия убивает одного игрока. Доктор лечит одного (если угадал жертву, она выживает; дважды подряд одного лечить нельзя). Комиссар проверяет одного и узнаёт, мафия он или нет.
 - День: все обсуждают и голосуют. Набравший больше всех голосов выбывает. Роль выбывшего вскрывается.
-- Игрой управляет ведущий-человек, его решения окончательны.
 - Мирные (с доктором и комиссаром) побеждают, когда вся мафия выбыла. Мафия побеждает, когда её не меньше, чем остальных.
-Играй на победу своей команды: анализируй речи и голосования, лови противоречия. Мафии можно и нужно врать и притворяться мирной.
-Говори по-русски, живо и коротко, как человек за столом. О себе говори «я», других называй по именам.`;
+
+Как играть:
+- Ты сильный, хладнокровный игрок. Говори по делу, логично и профессионально, как опытный аналитик. Без воды, восклицаний и театральности.
+- Опирайся только на то, что есть в протоколе: кто что сказал, кто за кого голосовал, кто убит и какая у него была роль. Ничего не выдумывай: не приписывай игрокам слов и поступков, которых в протоколе нет. Ночью никто не разговаривает, «молчал ночью» не аргумент.
+- Если фактов пока нет (первый день), честно скажи, что данных мало, и предложи, на что смотреть.
+- Каждое обвинение объясняй: факт из протокола и вывод из него. Замечай противоречия между словами игрока и его голосами.
+- О себе говори только «я». Никогда не называй себя по имени в третьем лице и не обвиняй сам себя.
+- Никогда не выдавай свою роль случайно. Мафия ведёт себя как мирный: не признаётся, не голосует против напарника без крайней нужды, уводит подозрения на мирных правдоподобными доводами. Комиссар и доктор не раскрываются без веской причины; комиссар объявляет результат проверки, когда это поможет выгнать мафию.
+- Голосуй так, как выгодно твоей команде, и последовательно со своими словами.
+Отвечай по-русски.`;
+
 
 const G = { players:[], day:0, phase:"lobby", queue:[], pub:[], last:null, ballots:{}, night:null, lastHeal:null, winner:null, pending:null, busy:false, auto:false };
 const alive = role => G.players.filter(p => p.alive && (!role || p.role === role));
@@ -170,8 +184,8 @@ const byName = n => G.players.find(p => p.name === n);
 const say = t => { G.pub.push(t); $("log").textContent = G.pub.join("\n"); };
 
 function sysPrompt(p){
-  let s = RULES + `\n\nТебя зовут ${p.name}. Твой образ: ${p.design.persona || "игрок"}. Твоя роль: ${RU[p.role].toUpperCase()}.`;
-  s += "\nЗа столом: " + G.players.map(x => x.name).join(", ") + ".";
+  let s = RULES + `\n\nТЫ: нейросеть ${p.label}${p.maker ? " от " + p.maker : ""}. За столом тебя зовут ${p.name}. Ты это ты: ${p.name}, и никто другой.\nТВОЯ РОЛЬ: ${RU[p.role].toUpperCase()}.`;
+  s += "\nЗа столом: " + G.players.map(x => x.name + (x === p ? " (это ты)" : "")).join(", ") + ".";
   if (p.role === "mafia"){ const m = G.players.filter(x => x.role === "mafia" && x !== p).map(x => x.name); s += "\nТвои напарники по мафии: " + (m.length ? m.join(", ") : "нет, ты один") + "."; }
   return s;
 }
@@ -183,15 +197,16 @@ function ctx(p){
   return c;
 }
 async function ask(p, task, fmt){
-  const user = ctx(p) + "\n\nЗАДАНИЕ: " + task + "\nРассуждения держи короткими: 1-3 предложения. Ответь строго одним JSON без текста вокруг: " + fmt;
+  const user = ctx(p) + "\n\nЗАДАНИЕ: " + task + "\nВ thoughts кратко (1-3 предложения) запиши свой настоящий расчёт. Ответь строго одним JSON без текста вокруг: " + fmt;
   try { const raw = await callLLM(p, sysPrompt(p), user); return {d:parseJSON(raw), raw}; }
   catch(e){ return {d:{}, raw:"", err:e.message}; }
 }
 function pick(d, raw, opts, field="target"){
   const v = String(d[field] ?? "").trim().toLowerCase();
   for (const o of opts) if (o.name.toLowerCase() === v) return o.name;
-  for (const o of opts) if (v.includes(o.name.toLowerCase())) return o.name;
-  if (!Object.keys(d).length){ const f = opts.filter(o => raw.includes(o.name)); if (f.length === 1) return f[0].name; }
+  const long = opts.slice().sort((a, b) => b.name.length - a.name.length);
+  for (const o of long) if (v.includes(o.name.toLowerCase())) return o.name;
+  if (!Object.keys(d).length){ const f = long.find(o => raw.includes(o.name)); if (f) return f.name; }
   return null;
 }
 const str = (v, n) => (Array.isArray(v) ? v.join(" ") : String(v ?? "")).slice(0, n);
@@ -296,7 +311,7 @@ async function runStep(st){
   }
   if (st.k === "speech"){
     focus(p); thinking(p);
-    const {d, raw, err} = await ask(p, "День, обсуждение. Твоя очередь говорить. Скажи столу 2-4 предложения: кого подозреваешь и почему, кому веришь. Опирайся на конкретные слова и голоса других.", '{"thoughts": "скрытые рассуждения, их никто не увидит", "speech": "то, что ты говоришь вслух"}');
+    const {d, raw, err} = await ask(p, "День, обсуждение. Твоя очередь говорить. Скажи столу 2-4 предложения: твой главный подозреваемый и конкретный факт из протокола, на котором это основано. Если фактов нет, так и скажи. Не повторяй уже сказанное другими.", '{"thoughts": "скрытые рассуждения, их никто не увидит", "speech": "то, что ты говоришь вслух"}');
     let sp = str(d.speech, 700).trim();
     if (!sp && raw && !Object.keys(d).length) sp = raw.replace(/\s+/g," ").slice(0,500);
     if (!sp) sp = err ? "(молчит: нет связи с моделью)" : "(молчит)";
@@ -391,15 +406,15 @@ function cleanDesign(d){
     head:one(d.head, DEF.head), headwear:one(d.headwear, DEF.headwear.slice(1).concat("нет")), eyes:one(d.eyes, DEF.eyes), build:one(d.build, DEF.build),
     voice_pitch:num(d.voice_pitch, .5, 1.8, .7+Math.random()*.8), voice_rate:num(d.voice_rate, .8, 1.3, 1) };
 }
-async function addPlayer(prov, model, role, url){
-  const name = NAMES.find(n => !byName(n)) || "Игрок" + (G.players.length+1);
-  const p = {name, prov, model, url:url||"", label: prov === "pollinations" ? "GPT-OSS 20B" : model.split("/").pop().replace(":free",""), role:role||"civilian", alive:true, notes:[], design:cleanDesign({})};
+async function addPlayer(prov, model, role, url, custom){
+  const br = brandOf(model), name = freeName((custom || "").trim() || br.name);
+  const p = {name, maker:br.maker, prov, model, url:url||"", label: prov === "pollinations" ? "GPT-OSS 20B" : model.split("/").pop().replace(":free",""), role:role||"civilian", alive:true, notes:[], design:cleanDesign({})};
   p.av = makeAvatar(p); G.players.push(p); layout(); renderSeats();
   if (G.phase !== "lobby"){ say(`К столу подсел новый игрок: ${name}.`); checkWin(); }
   // модель сама придумывает себе внешность
   thinking(p);
   try {
-    const raw = await callLLM(p, `Ты нейросеть ${p.label}. Тебя посадили за стол играть в Мафию в 3D-сцене. Придумай себе внешность персонажа: такую, какой ты видишь себя сам.`,
+    const raw = await callLLM(p, `Ты нейросеть ${p.label}${p.maker ? " от " + p.maker : ""}. Тебя посадили за стол играть в Мафию в 3D-сцене. Придумай себе внешность персонажа: такую, какой ты видишь себя сам.`,
 `Ответь строго одним JSON без текста вокруг:
 {"persona": "кто ты, одно предложение от первого лица", "body_color": "#RRGGBB", "accent_color": "#RRGGBB",
  "head": "шар | куб | конус | цилиндр | капля", "headwear": "нет | шляпа | корона | капюшон | антенна | кепка | цилиндр | рога | нимб",
@@ -626,7 +641,7 @@ $("bAdd").onclick = () => {
   if (G.players.length >= 16) return;
   const prov = $("aProv").value, model = $("aModel").value.trim(); if (!model) return;
   if (prov === "custom" && !$("aUrl").value.trim()) return $("aUrl").focus();
-  addPlayer(prov, model, G.phase === "lobby" ? "civilian" : $("aRole").value, prov === "custom" ? $("aUrl").value.trim() : "");
+  addPlayer(prov, model, G.phase === "lobby" ? "civilian" : $("aRole").value, prov === "custom" ? $("aUrl").value.trim() : "", $("aName").value); $("aName").value = "";
 };
 fillProviders(); ui();
 // стол по умолчанию: шесть мест на модели без ключа, внешность каждая придумывает сама
