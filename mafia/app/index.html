@@ -112,6 +112,9 @@ const PROV = {
 };
 const lastCall = {};
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// ночью при скрытых ролях нельзя показывать, кто сейчас ходит
+const secretNow = () => G.phase === "night" && $("spoil").value !== "1";
 
 async function callLLM(p, system, user){
   const pr = PROV[p.prov], url = p.url || pr.url;
@@ -131,7 +134,7 @@ async function callLLM(p, system, user){
       if (!r.ok){
         const body = await r.text(); last = "HTTP " + r.status + " " + body.slice(0,160);
         const ra = body.match(/Retry after (\d+)s/);       // бесплатная очередь: ждём, сколько просят
-        if (ra){ $("sub").innerHTML = `<div class="who">${p.name} <span>${p.label} ждёт очереди бесплатной модели: ${ra[1]} с</span></div>`; await sleep((+ra[1] + 1) * 1000); a--; if (++waits > 6) break; continue; }
+        if (ra){ $("sub").innerHTML = secretNow() ? `<div class="who">Ведущий</div><div>Город спит… (очередь бесплатной модели: ${+ra[1]} с)</div>` : `<div class="who">${esc(p.name)} <span>${esc(p.label)} ждёт очереди бесплатной модели: ${+ra[1]} с</span></div>`; await sleep((+ra[1] + 1) * 1000); a--; if (++waits > 6) break; continue; }
         if ([400,401,403,404].includes(r.status)) break; await sleep(4000*(a+1)); continue; }
       const d = await r.json(), txt = d.choices?.[0]?.message?.content || "";
       if (txt.trim()) return txt;
@@ -217,7 +220,7 @@ function dealRoles(){
   while (roles.length < n) roles.push("civilian");
   roles.length = n;
   for (let i = roles.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [roles[i],roles[j]] = [roles[j],roles[i]]; }
-  G.players.forEach((p,i) => { p.role = roles[i]; p.alive = true; p.notes = []; });
+  G.players.forEach((p,i) => { p.role = roles[i]; p.alive = true; p.notes = []; p.checked = []; });
 }
 function checkWin(){
   if (G.phase === "lobby" || G.phase === "over") return;
@@ -265,7 +268,7 @@ async function runStep(st){
     const targets = alive().filter(x => x.role !== "mafia");
     let task = "Ночь. Мафия выбирает жертву. Кандидаты: " + targets.map(t => t.name).join(", ") + ".";
     if (G.night.chat.length) task += "\nНапарники уже написали в тайном чате мафии:\n" + G.night.chat.join("\n");
-    focus(p); thinking(p);
+    nightTurn(p);
     const {d, raw, err} = await ask(p, task, '{"thoughts": "скрытые рассуждения", "message": "реплика напарникам", "target": "имя жертвы"}');
     const t = pick(d, raw, targets), msg = str(d.message, 400) || (err ? "(нет связи: " + err + ")" : "…");
     G.night.chat.push(`${p.name}: ${msg} (предлагаю: ${t})`); if (t) G.night.votes.push(t);
@@ -283,7 +286,7 @@ async function runStep(st){
   }
   if (st.k === "doctor"){
     const opts = alive().filter(x => x.name !== G.lastHeal);
-    focus(p); thinking(p);
+    nightTurn(p);
     const {d, raw} = await ask(p, "Ночь. Ты доктор. Кого лечишь? Можно себя. Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}');
     const t = pick(d, raw, opts); G.night.heal = t;
     if (t) p.notes.push(`Ночь ${G.day}: ты лечил игрока ${t}.`);
@@ -294,7 +297,7 @@ async function runStep(st){
   if (st.k === "commissar"){
     p.checked = p.checked || [];
     let opts = alive().filter(x => x !== p && !p.checked.includes(x.name)); if (!opts.length) opts = alive().filter(x => x !== p);
-    focus(p); thinking(p);
+    nightTurn(p);
     const {d, raw} = await ask(p, "Ночь. Ты комиссар. Кого проверяешь? Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}');
     const t = pick(d, raw, opts); let res = "";
     if (t){ const isM = byName(t).role === "mafia"; res = isM ? "Это мафия." : "Не мафия."; p.checked.push(t); p.notes.push(`Ночь ${G.day}: проверка показала, что ${t} ${isM ? "МАФИЯ" : "НЕ мафия"}.`); }
@@ -347,6 +350,7 @@ async function runStep(st){
 }
 async function next(){
   if (G.busy || G.pending) return;
+  if (G.phase === "over" && !G.queue.length){ G.phase = "lobby"; clearVotes(); setNight(false); focus(null); }   // новая партия тем же столом
   if (G.phase === "lobby"){ if (!startGame()) return; }
   if (!G.queue.length){
     if (G.phase === "over") return;
@@ -359,8 +363,8 @@ async function next(){
   if (G.auto && !G.pending && !(G.phase === "over" && !G.queue.length)) setTimeout(next, 500);
 }
 function startGame(){
-  if (G.players.length < 4){ show(null, "Нужно минимум 4 игрока. Открой «Стол и настройки» и посади ещё.", "", false); return false; }
-  dealRoles(); G.day = 0; G.pub = []; G.winner = null; G.lastHeal = null; G.phase = "start";
+  if (G.players.length < 4){ G.phase = "lobby"; ui(); show(null, "Нужно минимум 4 игрока. Открой «Стол и настройки» и посади ещё.", "", false); return false; }
+  dealRoles(); G.day = 0; G.pub = []; G.winner = null; G.lastHeal = null; G.ballots = {}; G.night = null; G.last = null; G.pending = null; G.phase = "start";
   G.players.forEach(p => { reviveAvatar(p); refreshLabel(p); });
   G.queue = [{k:"narr", text:"Игра начинается. Роли розданы. Знакомимся.", pub:"Игра началась. За столом: " + G.players.map(p => p.name).join(", ") + "."}]
     .concat(G.players.map(p => ({k:"intro", p})));
@@ -374,12 +378,13 @@ async function redo(){
 function skipPhase(){
   if (G.busy || G.phase === "lobby" || G.phase === "over") return;
   G.pending = null;
-  if (G.phase === "night"){ say(`Утро ${G.day}: ведущий прервал ночь, никто не погиб.`); setNight(false); }
+  if (G.phase === "night"){ G.lastHeal = G.night?.heal ?? null; say(`Утро ${G.day}: ведущий прервал ночь, никто не погиб.`); setNight(false); }
   else if (G.phase !== "start") say("Ведущий закрыл день без изгнания.");
   G.queue = []; if (G.phase === "start") G.phase = "day";
   show(null, "Ведущий переходит к следующему этапу.", "", false); ui();
 }
 function resolveTie(name){
+  if (name && !byName(name)?.alive) return;
   G.pending = null;
   if (name){ focus(byName(name)); const r = RU[byName(name).role]; eliminate(name, "Голоса были равны. Решением ведущего выбывает"); show(null, `Решение ведущего: выбывает ${name}. Он был: ${r}.`, "", true); }
   else { say("Голоса были равны. Ведущий решил никого не выгонять."); show(null, "Решение ведущего: никто не выбывает.", "", true); }
@@ -390,6 +395,7 @@ function kick(name){
   const p = byName(name);
   if (G.phase === "lobby"){ G.players = G.players.filter(x => x !== p); scene.remove(p.av.g); layout(); renderSeats(); return; }
   focus(p); const r = RU[p.role]; eliminate(name, "Ведущий удалил из игры игрока");
+  if (G.pending){ G.pending.names = G.pending.names.filter(n => byName(n)?.alive); if (!G.pending.names.length) G.pending = null; }
   show(null, `Ведущий удалил игрока ${name}. Он был: ${r}.`, "", true); renderSeats(); ui();
 }
 
@@ -519,7 +525,13 @@ function drawVotes(){
 }
 let focusP = null, speaking = null, camAz = 0, camAzT = 0, dragT = 0, camH = innerWidth < innerHeight ? 4.2 : 3.1;
 function focus(p){ focusP = p; if (p && performance.now() - dragT > 4000) camAzT = p.av.tAng + Math.PI + .5; }
-function thinking(p){ G.players.forEach(x => x.thinking = false); if (p) p.thinking = true; $("sub").innerHTML = `<div class="who">${p.name} <span>${p.label} думает…</span></div>`; }
+function thinking(p){ G.players.forEach(x => x.thinking = false); if (p) p.thinking = true; $("sub").innerHTML = `<div class="who">${esc(p.name)} <span>${esc(p.label)} думает…</span></div>`; }
+// тайный ночной ход: при скрытых ролях без камеры, прожектора и «думает…»
+function nightTurn(p){
+  if (!secretNow()){ focus(p); thinking(p); return; }
+  focus(null); G.players.forEach(x => x.thinking = false);
+  $("sub").innerHTML = `<div class="who">Ведущий</div><div>Город спит…</div>`;
+}
 let pd = null;
 canvas.addEventListener("pointerdown", e => { pd = {x:e.clientX, y:e.clientY, az:camAzT, h:camH}; canvas.setPointerCapture(e.pointerId); });
 canvas.addEventListener("pointermove", e => { if (!pd) return; camAzT = pd.az - (e.clientX - pd.x) * .008; camH = Math.min(6, Math.max(1.6, pd.h + (e.clientY - pd.y) * .012)); dragT = performance.now(); });
@@ -581,7 +593,6 @@ async function show(p, text, think, pub, alt){
   G.players.forEach(x => x.thinking = false);
   let who = p, body = text;
   if (!pub && !sp){ who = null; body = alt || "Город спит…"; think = ""; }
-  const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
   $("sub").innerHTML = `<div class="who">${who ? esc(who.name) + ` <span>${esc(who.label)}${sp && G.phase !== "lobby" ? " · " + RU[who.role] : ""}</span>` : "Ведущий"}</div><div>${esc(body)}</div>` + (think && sp ? `<div class="think">Про себя: ${esc(think)}</div>` : "");
   lastSay = {p:who, text:body};
   speaking = who; await speak(who, body); speaking = null;
@@ -590,8 +601,8 @@ async function show(p, text, think, pub, alt){
 // ============ интерфейс
 function ui(){
   const over = G.phase === "over" && !G.queue.length;
-  $("bNext").textContent = G.busy ? "Думает…" : G.phase === "lobby" ? "Начать игру" : over ? "Игра окончена" : "Дальше";
-  $("bNext").disabled = G.busy || !!G.pending || over;
+  $("bNext").textContent = G.busy ? "Думает…" : G.phase === "lobby" ? "Начать игру" : over ? "Новая партия" : "Дальше";
+  $("bNext").disabled = G.busy || !!G.pending;
   $("bRedo").disabled = G.busy || !G.last; $("bSay").disabled = G.busy || !lastSay;
   $("bSkip").disabled = G.busy || G.phase === "lobby" || G.phase === "over";
   $("bAuto").textContent = "Авто: " + (G.auto ? "вкл" : "выкл"); $("bAuto").classList.toggle("on", G.auto);
@@ -632,7 +643,7 @@ $("aUrl").value = store.get("aUrl"); $("aUrl").onchange = () => store.set("aUrl"
 $("bMenu").onclick = () => { $("drawer").hidden = false; renderSeats(); };
 $("bClose").onclick = () => $("drawer").hidden = true;
 $("bNext").onclick = next;
-$("bAuto").onclick = () => { G.auto = !G.auto; ui(); if (G.auto && !G.busy && G.phase !== "lobby") next(); };
+$("bAuto").onclick = () => { G.auto = !G.auto; ui(); if (G.auto && !G.busy && G.phase !== "lobby" && G.phase !== "over") next(); };
 $("bSay").onclick = async () => { if (lastSay && !G.busy){ speaking = lastSay.p; if (lastSay.p) focus(lastSay.p); await speak(lastSay.p, lastSay.text); speaking = null; } };
 $("bRedo").onclick = redo;
 $("bSkip").onclick = skipPhase;
