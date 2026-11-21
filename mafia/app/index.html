@@ -43,6 +43,9 @@ label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4p
 #log{font-size:13px;white-space:pre-wrap;color:#cfcdc4;overflow-wrap:anywhere}
 .note{font-size:12px;color:var(--mute)}
 [hidden]{display:none!important}
+#setup{position:fixed;inset:0;background:#000b;display:flex;align-items:center;justify-content:center;z-index:30}#setup[hidden]{display:none}
+#setup .card{background:#11121b;border:1px solid var(--line);border-radius:14px;padding:18px;width:min(460px,92%);display:grid;gap:10px;max-height:92vh;overflow:auto}
+#setup h2{font:800 18px var(--display);margin:0}#setup label{display:grid;gap:4px;font-size:13px;color:var(--mute)}
 </style>
 </head>
 <body>
@@ -64,13 +67,26 @@ label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4p
     <button id="bSkip">Следующий этап</button>
   </div>
 </div>
+<div id="setup"><div class="card">
+  <h2>Новая партия</h2>
+  <div class="grid2">
+    <label>Игроков за столом<input id="sPlayers" type="number" min="4" max="16" value="8"></label>
+    <label>Мафий<select id="sMafia"></select></label>
+  </div>
+  <label>Дон мафии<select id="sDon"><option value="1">есть: жертву выбирает он</option><option value="0">нет: мафия решает большинством</option></select></label>
+  <div class="note" id="sNote"></div>
+  <div class="note" id="sList"></div>
+  <button id="sGo" class="main">Посадить всех автоматически и начать</button>
+  <button id="sSame" hidden>Сыграть тем же столом</button>
+  <button id="sManual">Рассажу сам вручную</button>
+</div></div>
 <aside class="drawer" id="drawer" hidden>
   <h2>Игроки <button id="bClose">Закрыть</button></h2>
   <div id="seats"></div>
   <h2>Состав стола</h2>
   <div class="grid2">
     <label>Игроков за столом<input id="nPlayers" type="number" min="4" max="16" value="8"></label>
-    <label>&nbsp;<button id="bFill">Рассадить заново</button></label>
+    <label>&nbsp;<button id="bFill">Посадить всех автоматически</button></label>
   </div>
   <div class="note">Рассаживает разные нейросети из всех источников, к которым есть ключ. Роли раздаются случайно при старте игры.</div>
   <h2>Посадить нейросеть</h2>
@@ -84,7 +100,7 @@ label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4p
   <button id="bAdd" class="main">Посадить за стол</button>
   <h2>Правила стола</h2>
   <div class="grid2">
-    <label>Мафий в игре<input id="nMafia" type="number" min="1" max="6" value="2"></label>
+    <label>Мафий в игре<input id="nMafia" type="number" min="1" max="6" placeholder="авто"></label>
     <label>Показывать мне<select id="spoil"><option value="1">роли и мысли</option><option value="0">только то, что слышит стол</option></select></label>
   </div>
   <label>Голос<select id="sound"><option value="1">включён</option><option value="0">выключен</option></select></label>
@@ -177,10 +193,11 @@ function brandOf(model){ const b = BRANDS.find(x => x[0].test(model)); return b 
 function freeName(base){ if (!byName(base)) return base; for (let i = 2; ; i++) if (!byName(base + " " + i)) return base + " " + i; }
 const NAMES = ["Алиса","Борис","Вера","Глеб","Дина","Егор","Жанна","Захар","Инга","Кирилл","Лада","Марк","Нина","Олег","Полина","Роман","Соня","Тимур"];
 const RU = {mafia:"мафия", doctor:"доктор", commissar:"комиссар", civilian:"мирный житель"};
+const rn = p => p.don ? "дон мафии" : RU[p.role];
 const RULES = `Ты играешь в настольную игру Мафия. За столом сидят нейросети разных компаний, каждая под своим настоящим именем. Ведущий: человек, его решения окончательны.
 Правила:
 - Роли: мафия (знает своих), один доктор, один комиссар, остальные мирные жители. Двух докторов или двух комиссаров не бывает. Роли скрыты.
-- Ночь: мафия убивает одного игрока. Доктор лечит одного (если угадал жертву, она выживает; дважды подряд одного лечить нельзя). Комиссар в первую ночь только проверяет одного игрока и узнаёт, мафия он или нет; со второй ночи он каждую ночь выбирает одно из двух: проверить игрока или выстрелить в него.
+- Ночь: мафия совещается и убивает одного игрока. Если в игре есть дон мафии, он глава: мафия спорит, но убит будет тот, кого назвал дон. Доктор лечит одного (если угадал жертву, она выживает; дважды подряд одного лечить нельзя). Комиссар в первую ночь только проверяет одного игрока и узнаёт, мафия он или нет; со второй ночи он каждую ночь выбирает одно из двух: проверить игрока или выстрелить в него.
 - День: все обсуждают, затем голосуют. Голосовать обязан каждый живой игрок: воздержаться нельзя, за себя голосовать нельзя. Набравший больше всех голосов выбывает из игры. При равенстве голосов решает ведущий. Роль выбывшего вскрывается.
 - Выбывшие и убитые больше не говорят и не голосуют.
 - Мирные (с доктором и комиссаром) побеждают, когда вся мафия выбыла. Мафия побеждает, когда её не меньше, чем остальных.
@@ -208,9 +225,9 @@ const byName = n => G.players.find(p => p.name === n);
 const say = t => { G.pub.push(t); $("log").textContent = G.pub.join("\n"); };
 
 function sysPrompt(p){
-  let s = RULES + `\n\nТЫ: нейросеть ${p.label}${p.maker ? " от " + p.maker : ""}. За столом тебя зовут ${p.name}. Ты это ты: ${p.name}, и никто другой.\nТВОЯ РОЛЬ: ${RU[p.role].toUpperCase()}.`;
+  let s = RULES + `\n\nТЫ: нейросеть ${p.label}${p.maker ? " от " + p.maker : ""}. За столом тебя зовут ${p.name}. Ты это ты: ${p.name}, и никто другой.\nТВОЯ РОЛЬ: ${rn(p).toUpperCase()}.`;
   s += "\nЗа столом: " + G.players.map(x => x.name + (x === p ? " (это ты)" : "")).join(", ") + ".";
-  if (p.role === "mafia"){ const m = G.players.filter(x => x.role === "mafia" && x !== p).map(x => x.name); s += "\nТвои напарники по мафии: " + (m.length ? m.join(", ") : "нет, ты один") + "."; }
+  if (p.role === "mafia"){ const m = G.players.filter(x => x.role === "mafia" && x !== p).map(x => x.name); s += "\nТвои напарники по мафии: " + (m.length ? m.join(", ") : "нет, ты один") + "."; const dn = G.players.find(x => x.don && x.alive); if (dn) s += dn === p ? "\nТы дон мафии: ночью убит будет тот, кого назовёшь ты. Выслушай напарников и реши." : `\nДон мафии: ${dn.name}. Ночью убит будет тот, кого назовёт он: убеди его в своей цели.`; }
   return s;
 }
 function ctx(p){
@@ -221,7 +238,7 @@ function ctx(p){
   return c;
 }
 async function ask(p, task, fmt){
-  const user = ctx(p) + "\n\nЗАДАНИЕ: " + task + "\nВ thoughts очень кратко (1-2 предложения) запиши свой настоящий расчёт. Отвечай быстро, без долгих рассуждений. Ответь строго одним JSON без текста вокруг: " + fmt;
+  const user = ctx(p) + "\n\nЗАДАНИЕ: " + task + "\nСначала подумай. В thoughts разбери по шагам (3-5 коротких предложений): что говорил и как голосовал каждый игрок, кто кем может быть, что выгодно твоей команде. Только потом дай ответ, который следует из этого разбора. Ответь строго одним JSON без текста вокруг: " + fmt;
   const need = fmt.includes('"target"') ? "target" : fmt.includes('"speech"') ? "speech" : null;
   try {
     let raw = await callLLM(p, sysPrompt(p), user), d = parseJSON(raw);
@@ -240,13 +257,17 @@ function pick(d, raw, opts, field="target"){
 const EMO = ["злость", "печаль", "радость", "удивление", "спокойно"];
 const str = (v, n) => (Array.isArray(v) ? v.join(" ") : String(v ?? "")).slice(0, n);
 
+// сколько мафий на сколько игроков: 4-5 игроков 1, 6-8 2, 9-11 3, 12-14 4, 15-16 5
+const recMafia = n => n <= 5 ? 1 : n <= 8 ? 2 : n <= 11 ? 3 : n <= 14 ? 4 : 5;
+const maxMafia = n => n <= 6 ? recMafia(n) : recMafia(n) + 1;
 function dealRoles(){
-  const n = G.players.length, nm = Math.min(Math.max(1, +$("nMafia").value || 1), Math.floor((n-1)/2));
+  const n = G.players.length, nm = Math.min(Math.max(1, +$("nMafia").value || recMafia(n)), maxMafia(n));
   const roles = Array(nm).fill("mafia").concat(["doctor","commissar"]);
   while (roles.length < n) roles.push("civilian");
   roles.length = n;
   for (let i = roles.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [roles[i],roles[j]] = [roles[j],roles[i]]; }
-  G.players.forEach((p,i) => { p.role = roles[i]; p.alive = true; p.notes = []; p.checked = []; });
+  G.players.forEach((p,i) => { p.role = roles[i]; p.alive = true; p.notes = []; p.checked = []; p.don = false; });
+  G.useDon = $("sDon").value === "1" && nm >= 2; if (G.useDon) rnd(G.players.filter(p => p.role === "mafia")).don = true;
 }
 function checkWin(){
   if (G.phase === "lobby" || G.phase === "over") return;
@@ -255,7 +276,8 @@ function checkWin(){
   G.phase = "over"; G.queue = [{k:"end"}]; G.pending = null;
 }
 function buildNight(){
-  G.day++; G.phase = "night"; G.night = {chat:[], votes:[], victim:null, heal:null}; G.ballots = {}; clearVotes();
+  G.day++; G.phase = "night"; G.night = {chat:[], votes:[], mv:{}, shot:null, victim:null, heal:null}; G.ballots = {}; clearVotes();
+  if (G.useDon && alive("mafia").length && !alive("mafia").some(m => m.don)){ const nd = alive("mafia")[0]; nd.don = true; alive("mafia").forEach(m => m.notes.push(`Прежний дон выбыл. Новый дон мафии: ${nd.name}.`)); refreshLabel(nd); }
   const q = [{k:"narr", text:`Ночь ${G.day}. Город засыпает. Просыпается мафия.`, pub:`--- Ночь ${G.day} ---`}];
   alive("mafia").forEach(p => q.push({k:"mafia", p}));
   q.push({k:"mafiaResolve"});
@@ -279,7 +301,7 @@ const shuffle = a => { a = a.slice(); for (let i = a.length-1; i > 0; i--){ cons
 function eliminate(name, how){
   const p = byName(name); if (!p || !p.alive) return;
   p.alive = false; killAvatar(p);
-  say(`${how} ${name}. Роль: ${RU[p.role]}.`);
+  say(`${how} ${name}. Роль: ${rn(p)}.`);
   checkWin();
 }
 
@@ -293,22 +315,29 @@ async function runStep(st){
   if (st.k === "mafia"){
     const targets = alive().filter(x => x.role !== "mafia");
     let task = "Ночь. Мафия выбирает жертву. Кандидаты: " + targets.map(t => t.name).join(", ") + ".";
-    if (G.night.chat.length) task += "\nНапарники уже написали в тайном чате мафии:\n" + G.night.chat.join("\n");
+    if (st.r2) task = "Ночь. Мафия назвала разные жертвы. Обсудите и договоритесь: ответь напарникам доводом и назови окончательную цель. Кандидаты: " + targets.map(t => t.name).join(", ") + ".";
+    if (G.night.chat.length) task += "\nТайный чат мафии этой ночью:\n" + G.night.chat.join("\n");
     nightTurn(p);
     const {d, raw, err} = await ask(p, task, '{"thoughts": "скрытые рассуждения", "message": "реплика напарникам", "target": "имя жертвы"}');
     let t = pick(d, raw, targets); const lost = !t && targets.length; if (lost) t = rnd(targets).name;
     const msg = (str(d.message, 400) || (err ? "(нет связи: " + err.slice(0,80) + ")" : "…")) + (lost ? " [не назвал цель, выбрана случайная]" : "");
-    G.night.chat.push(`${p.name}: ${msg} (предлагаю: ${t})`); if (t) G.night.votes.push(t);
-    G.last = {st, undo(){ G.night.chat.pop(); if (t) G.night.votes.pop(); }};
+    const prev = G.night.mv[p.name]; G.night.chat.push(`${p.name}${p.don ? " (дон)" : ""}: ${msg} (предлагаю: ${t})`); G.night.mv[p.name] = t;
+    G.last = {st, undo(){ G.night.chat.pop(); G.night.mv[p.name] = prev; }};
     await show(p, `Шепчет мафии: ${msg} Цель: ${t || "не выбрал"}.`, str(d.thoughts, 600), false, "Мафия совещается…");
     return;
   }
   if (st.k === "mafiaResolve"){
-    const v = G.night.votes; if (!v.length) return;
+    const maf = alive("mafia"), v = maf.map(m => G.night.mv[m.name]).filter(Boolean); if (!v.length) return;
+    // назвали разные жертвы: ещё один круг спора, потом решение
+    if (!st.final && maf.length > 1 && new Set(v).size > 1){
+      G.queue.unshift(...maf.map(m => ({k:"mafia", p:m, r2:true})), {k:"mafiaResolve", final:true});
+      await show(null, "Мафия назвала разные жертвы и спорит.", "", false, "Мафия совещается…"); return;
+    }
     const c = {}; v.forEach(x => c[x] = (c[x]||0)+1); const top = Math.max(...Object.values(c));
-    G.night.victim = v.slice().reverse().find(x => c[x] === top);
+    const don = maf.find(m => m.don && G.night.mv[m.name]);
+    G.night.victim = don ? G.night.mv[don.name] : v.slice().reverse().find(x => c[x] === top);
     alive("mafia").forEach(m => m.notes.push(`Ночь ${G.day}: мафия стреляла в игрока ${G.night.victim}.`));
-    await show(null, `Мафия выбрала жертву: ${G.night.victim}.`, "", false, "Мафия сделала выбор и засыпает.");
+    await show(null, `Мафия выбрала жертву: ${G.night.victim}.` + (don ? ` Решение дона (${don.name}).` : ""), "", false, "Мафия сделала выбор и засыпает.");
     return;
   }
   if (st.k === "doctor"){
@@ -344,7 +373,7 @@ async function runStep(st){
     // ночью стреляют мафия и, со второй ночи, комиссар; доктор спасает того, кого лечил
     const hits = [...new Set([G.night.victim, G.night.shot].filter(Boolean))], saved = hits.filter(n => n === heal), dead = hits.filter(n => n !== heal && byName(n) && byName(n).alive);
     const parts = [];
-    for (const n of dead){ const x = byName(n), r = RU[x.role]; x.alive = false; killAvatar(x); parts.push(`ночью убит игрок ${n}. Его роль: ${r}`); }
+    for (const n of dead){ const x = byName(n), r = rn(x); x.alive = false; killAvatar(x); parts.push(`ночью убит игрок ${n}. Его роль: ${r}`); }
     if (saved.length) parts.push("доктор спас игрока, в которого стреляли");
     if (!parts.length) parts.push("ночь прошла тихо, никто не погиб");
     say(`Утро ${G.day}: ` + parts.join("; ") + ".");
@@ -381,7 +410,7 @@ async function runStep(st){
     say("Голоса: " + (b.map(([k,v]) => `${k} -> ${v || "воздержался"}`).join("; ") || "никто не голосовал"));
     const c = {}; b.forEach(([,v]) => { if (v && byName(v)?.alive) c[v] = (c[v]||0)+1; });
     const top = Math.max(0, ...Object.values(c)), lead = Object.keys(c).filter(k => c[k] === top);
-    if (lead.length === 1){ focus(byName(lead[0])); const r = RU[byName(lead[0]).role]; eliminate(lead[0], "По итогам голосования выбывает"); await show(null, `Стол выгоняет игрока ${lead[0]}. Он был: ${r}.`, "", true); }
+    if (lead.length === 1){ focus(byName(lead[0])); const r = rn(byName(lead[0])); eliminate(lead[0], "По итогам голосования выбывает"); await show(null, `Стол выгоняет игрока ${lead[0]}. Он был: ${r}.`, "", true); }
     else if (!lead.length){ say("Никто не получил голосов, никто не выбывает."); await show(null, "Никто не получил голосов. Никто не выбывает.", "", true); }
     else { G.pending = {type:"tie", names:lead}; await show(null, `Голоса равны: ${lead.join(", ")}. Решает ведущий.`, "", true); }
     return;
@@ -394,7 +423,7 @@ async function runStep(st){
 }
 async function next(){
   if (G.busy || G.pending || filling) return;
-  if (G.phase === "over" && !G.queue.length){ G.phase = "lobby"; clearVotes(); setNight(false); focus(null); }   // новая партия тем же столом
+  if (G.phase === "over" && !G.queue.length){ G.auto = false; openSetup(); return; }
   if (G.phase === "lobby"){ if (!startGame()) return; }
   if (!G.queue.length){
     if (G.phase === "over") return;
@@ -430,7 +459,7 @@ function skipPhase(){
 function resolveTie(name){
   if (name && !byName(name)?.alive) return;
   G.pending = null;
-  if (name){ focus(byName(name)); const r = RU[byName(name).role]; eliminate(name, "Голоса были равны. Решением ведущего выбывает"); show(null, `Решение ведущего: выбывает ${name}. Он был: ${r}.`, "", true); }
+  if (name){ focus(byName(name)); const r = rn(byName(name)); eliminate(name, "Голоса были равны. Решением ведущего выбывает"); show(null, `Решение ведущего: выбывает ${name}. Он был: ${r}.`, "", true); }
   else { say("Голоса были равны. Ведущий решил никого не выгонять."); show(null, "Решение ведущего: никто не выбывает.", "", true); }
   ui(); if (G.auto) setTimeout(next, 900);
 }
@@ -438,7 +467,7 @@ function kick(name){
   if (G.busy) return;
   const p = byName(name);
   if (G.phase === "lobby"){ G.players = G.players.filter(x => x !== p); scene.remove(p.av.g); layout(); renderSeats(); return; }
-  focus(p); const r = RU[p.role]; eliminate(name, "Ведущий удалил из игры игрока");
+  focus(p); const r = rn(p); eliminate(name, "Ведущий удалил из игры игрока");
   if (G.pending){ G.pending.names = G.pending.names.filter(n => byName(n)?.alive); if (!G.pending.names.length) G.pending = null; }
   show(null, `Ведущий удалил игрока ${name}. Он был: ${r}.`, "", true); renderSeats(); ui();
 }
@@ -525,7 +554,7 @@ function refreshLabel(p, reveal){
   x.strokeText(p.name, 256, 62); x.fillStyle = p.alive ? "#fff" : "#888"; x.fillText(p.name, 256, 62);
   x.font = "500 30px 'Golos Text',sans-serif";
   let sub = p.label; let col = "#b9bbc8";
-  if (sp && G.phase !== "lobby"){ sub = RU[p.role] + " · " + p.label; col = p.role === "mafia" ? "#ff7a7e" : p.role === "civilian" ? "#7fd8c5" : "#f0c267"; }
+  if (sp && G.phase !== "lobby"){ sub = rn(p) + " · " + p.label; col = p.role === "mafia" ? "#ff7a7e" : p.role === "civilian" ? "#7fd8c5" : "#f0c267"; }
   x.strokeText(sub.slice(0,30), 256, 112); x.fillStyle = col; x.fillText(sub.slice(0,30), 256, 112);
   const nv = Object.values(G.ballots).filter(v => v === p.name).length;
   if (nv && p.alive){ const t = "голосов против: " + nv; x.font = "800 34px 'Golos Text',sans-serif"; x.strokeText(t, 256, 152); x.fillStyle = "#ff5a5f"; x.fillText(t, 256, 152); }
@@ -696,7 +725,7 @@ async function show(p, text, think, pub, alt){
   G.players.forEach(x => x.thinking = false);
   let who = p, body = text;
   if (!pub && !sp){ who = null; body = alt || "Город спит…"; think = ""; }
-  $("sub").innerHTML = `<div class="who">${who ? esc(who.name) + ` <span>${esc(who.label)}${sp && G.phase !== "lobby" ? " · " + RU[who.role] : ""}</span>` : "Ведущий"}</div><div>${esc(body)}</div>` + (think && sp ? `<div class="think">Про себя: ${esc(think)}</div>` : "");
+  $("sub").innerHTML = `<div class="who">${who ? esc(who.name) + ` <span>${esc(who.label)}${sp && G.phase !== "lobby" ? " · " + rn(who) : ""}</span>` : "Ведущий"}</div><div>${esc(body)}</div>` + (think && sp ? `<div class="think">Про себя: ${esc(think)}</div>` : "");
   lastSay = {p:who, text:body};
   hist.push({p:who, html:$("sub").innerHTML, text:body}); if (hist.length > 300) hist.shift(); histI = hist.length - 1;
   speaking = who; await speak(who, body); speaking = null;
@@ -733,7 +762,7 @@ function renderSeats(){
   const sp = $("spoil").value === "1", el = $("seats"); el.innerHTML = "";
   for (const p of G.players){
     const d = document.createElement("div"); d.className = "seat";
-    const role = sp && G.phase !== "lobby" ? ` <span class="role ${p.role}">${RU[p.role]}</span>` : "";
+    const role = sp && G.phase !== "lobby" ? ` <span class="role ${p.role}">${rn(p)}</span>` : "";
     d.innerHTML = `<div><b class="${p.alive ? "" : "dead"}"></b>${role}</div><small></small>`;
     d.querySelector("b").textContent = p.name; d.querySelector("small").textContent = p.label + (p.design.persona ? " · " + p.design.persona : "");
     if (p.alive){ const b = document.createElement("button"); b.className = "danger"; b.textContent = G.phase === "lobby" ? "Убрать" : "Выгнать"; b.onclick = () => kick(p.name); d.appendChild(b); }
@@ -802,7 +831,23 @@ async function fillTable(){
   filling = false; $("bFill").disabled = false; ui();
 }
 $("nPlayers").value = store.get("nPlayers") || 8; $("bFill").onclick = fillTable;
-fillTable();
+// стартовое окно: состав партии
+function setupRefresh(){
+  const n = Math.min(16, Math.max(4, +$("sPlayers").value || 8)), cur = $("sMafia").value, rec = recMafia(n);
+  $("sMafia").innerHTML = `<option value="">авто: ${rec}</option>` + Array.from({length:maxMafia(n)}, (_, i) => `<option value="${i+1}">${i+1}</option>`).join("");
+  if (+cur && +cur <= maxMafia(n)) $("sMafia").value = cur;
+  const nm = +$("sMafia").value || rec;
+  $("sNote").textContent = `Состав: мафия ${nm}${nm >= 2 && $("sDon").value === "1" ? " (один из них дон)" : ""}, доктор 1, комиссар 1, мирных ${Math.max(0, n - nm - 2)}. Роли раздаются случайно.`;
+  $("sList").textContent = "За стол сядут (встроенный список бесплатных моделей по твоим ключам): " + lineup(n).map(([k, m]) => brandOf(m).name + " · " + (k === "pollinations" ? "GPT-OSS 20B" : m.split("/").pop().replace(":free","")) + " (" + PROV[k].title.split(":")[0] + ")").join("; ") + ". Если модель не ответит, её заменит следующая из списка.";
+  $("sSame").hidden = G.players.length < 4;
+}
+function openSetup(){ $("sPlayers").value = $("nPlayers").value; setupRefresh(); $("setup").hidden = false; }
+function applySetup(){ $("nPlayers").value = Math.min(16, Math.max(4, +$("sPlayers").value || 8)); $("nMafia").value = $("sMafia").value; $("setup").hidden = true; }
+$("sPlayers").oninput = setupRefresh; $("sMafia").onchange = setupRefresh; $("sDon").onchange = setupRefresh;
+$("sGo").onclick = async () => { applySetup(); await fillTable(); next(); };
+$("sSame").onclick = () => { applySetup(); G.phase = "lobby"; clearVotes(); setNight(false); focus(null); next(); };
+$("sManual").onclick = () => { applySetup(); if (G.phase === "over"){ G.phase = "lobby"; clearVotes(); setNight(false); } $("drawer").hidden = false; renderSeats(); };
+openSetup();
 window.G = G;
 </script>
 </body>
