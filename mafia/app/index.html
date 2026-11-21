@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Мафия нейросетей</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;700&family=Unbounded:wght@500;800&display=swap">
+<style>
+:root{color-scheme:dark;--bg:#0b0c12;--panel:#161823ee;--line:#2c2f3e;--fg:#ece9df;--mute:#9a9cab;--blood:#e5484d;--town:#4cb5a0;--gold:#d9a441;
+ --display:"Unbounded","Arial Black",sans-serif;--body:"Golos Text",system-ui,sans-serif}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 var(--body);overflow:hidden}
+canvas#stage{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+button{font:600 13px var(--body);color:var(--fg);background:#232636;border:1px solid var(--line);border-radius:8px;padding:10px 12px;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+button.main{background:var(--gold);color:#17130a;border-color:var(--gold);font-weight:700}
+button.danger{border-color:var(--blood);color:#ffb3b5}
+button.on{background:#3a3520;border-color:var(--gold)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+input,select{font:14px var(--body);color:var(--fg);background:#0f1018;border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%;min-width:0}
+#top{position:fixed;top:0;left:0;right:0;padding:calc(10px + env(safe-area-inset-top,0px)) 14px 10px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;pointer-events:none}
+#top>*{pointer-events:auto}
+#phase{font:800 clamp(15px,4.2vw,22px)/1.1 var(--display);text-shadow:0 2px 12px #000}
+#phase small{display:block;font:500 12px var(--body);color:var(--mute);margin-top:4px}
+#bottom{position:fixed;left:0;right:0;bottom:0;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:8px;background:linear-gradient(transparent,#07080cdd 35%)}
+#sub{max-width:760px;margin:0 auto;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-height:54px;max-height:34vh;overflow:auto}
+#sub .who{font-weight:700;color:var(--gold)}
+#sub .who span{font-weight:400;color:var(--mute);font-size:12px}
+#sub .think{color:var(--mute);font-style:italic;font-size:13px;margin-top:6px;border-left:2px solid var(--line);padding-left:8px}
+#ctl{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;max-width:760px;margin:0 auto;width:100%}
+#ctl button{flex:1 1 auto}
+#decide{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(420px,100%);background:#11121b;border-left:1px solid var(--line);padding:calc(14px + env(safe-area-inset-top,0px)) 14px calc(14px + env(safe-area-inset-bottom,0px));overflow:auto;display:flex;flex-direction:column;gap:14px;z-index:5}
+.drawer h2{font:500 13px var(--display);letter-spacing:.05em;text-transform:uppercase;margin:0;display:flex;justify-content:space-between;align-items:center}
+.seat{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:8px 0;border-bottom:1px solid var(--line)}
+.seat b.dead{text-decoration:line-through;color:var(--mute)}
+.seat small{color:var(--mute);grid-column:1;overflow-wrap:anywhere}
+.seat button{grid-row:1/3;grid-column:2;align-self:center;padding:6px 9px}
+.role{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.role.mafia{color:var(--blood)}.role.doctor,.role.commissar{color:var(--gold)}.role.civilian{color:var(--town)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4px}
+#log{font-size:13px;white-space:pre-wrap;color:#cfcdc4;overflow-wrap:anywhere}
+.note{font-size:12px;color:var(--mute)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="top">
+  <div id="phase">Мафия нейросетей<small>Стол собирается</small></div>
+  <button id="bMenu">Стол и настройки</button>
+</div>
+<div id="bottom">
+  <div id="sub"><div class="who">Ведущий</div><div id="subText">Рассади нейросети за стол и нажми «Начать игру». Ты ведущий: решаешь, когда идти дальше, кого переспросить и кого выгнать.</div></div>
+  <div id="decide" hidden></div>
+  <div id="ctl">
+    <button id="bNext" class="main">Начать игру</button>
+    <button id="bAuto">Авто: выкл</button>
+    <button id="bSay">Озвучить снова</button>
+    <button id="bRedo">Переспросить</button>
+    <button id="bSkip">Следующий этап</button>
+  </div>
+</div>
+<aside class="drawer" id="drawer" hidden>
+  <h2>Игроки <button id="bClose">Закрыть</button></h2>
+  <div id="seats"></div>
+  <h2>Посадить нейросеть</h2>
+  <div class="grid2">
+    <label>Источник<select id="aProv"></select></label>
+    <label>Роль (если игра идёт)<select id="aRole"><option value="civilian">мирный</option><option value="mafia">мафия</option><option value="doctor">доктор</option><option value="commissar">комиссар</option></select></label>
+  </div>
+  <label>Модель<input id="aModel" list="models"><datalist id="models"></datalist></label>
+  <label id="aUrlWrap" hidden>Адрес API (совместимый с OpenAI)<input id="aUrl" placeholder="http://localhost:11434/v1/chat/completions"></label>
+  <button id="bAdd" class="main">Посадить за стол</button>
+  <h2>Правила стола</h2>
+  <div class="grid2">
+    <label>Мафий в игре<input id="nMafia" type="number" min="1" max="6" value="2"></label>
+    <label>Показывать мне<select id="spoil"><option value="1">роли и мысли</option><option value="0">только то, что слышит стол</option></select></label>
+  </div>
+  <label>Голос<select id="sound"><option value="1">включён</option><option value="0">выключен</option></select></label>
+  <h2>Бесплатные ключи</h2>
+  <div class="note">Ключи хранятся только в этом браузере. Без ключей работает одна модель: GPT-OSS. Каждый ключ добавляет новые нейросети в список «Источник».</div>
+  <label>OpenRouter (openrouter.ai/keys)<input id="kOpenrouter" type="password" autocomplete="off"></label>
+  <label>Google Gemini (aistudio.google.com/apikey)<input id="kGemini" type="password" autocomplete="off"></label>
+  <label>Groq (console.groq.com/keys)<input id="kGroq" type="password" autocomplete="off"></label>
+  <label>Mistral (console.mistral.ai)<input id="kMistral" type="password" autocomplete="off"></label>
+  <label>Ключ для своего адреса (необязательно)<input id="kCustom" type="password" autocomplete="off"></label>
+  <h2>Протокол</h2>
+  <div id="log"></div>
+</aside>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const store = { get(k){ try { return localStorage.getItem(k) || ""; } catch(e){ return ""; } }, set(k,v){ try { localStorage.setItem(k,v); } catch(e){} } };
+
+// ============ источники моделей
+const PROV = {
+  pollinations:{ title:"Без ключа: GPT-OSS (OpenAI)", url:"/api/chat", key:null, gap:3500,
+    models:["openai-fast"] },
+  openrouter:{ title:"OpenRouter", url:"https://openrouter.ai/api/v1/chat/completions", key:"kOpenrouter", gap:1500,
+    models:["google/gemma-4-31b-it:free","nvidia/nemotron-3-ultra-550b-a55b:free","baidu/ernie-5.5-flash-preview:free","inclusionai/ling-3.2-flash:free","particle-ai/particle-1:free","recursive/flint-v1.0:free","nvidia/nemotron-3.5-lightning:free","liquid/lfm-3-1.7b:free"] },
+  gemini:{ title:"Google Gemini", url:"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", key:"kGemini", gap:4500,
+    models:["gemini-flash-latest","gemini-flash-lite-latest"] },
+  groq:{ title:"Groq", url:"https://api.groq.com/openai/v1/chat/completions", key:"kGroq", gap:2500,
+    models:["llama-3.3-70b-versatile","openai/gpt-oss-120b","moonshotai/kimi-k2-instruct","qwen/qwen3-32b"] },
+  mistral:{ title:"Mistral", url:"https://api.mistral.ai/v1/chat/completions", key:"kMistral", gap:1500,
+    models:["mistral-small-latest","mistral-large-latest"] },
+  custom:{ title:"Свой адрес (Ollama и другие)", url:"", key:"kCustom", gap:0, models:["llama3.2","gemma3","qwen3"] },
+};
+const lastCall = {};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function callLLM(p, system, user){
+  const pr = PROV[p.prov], url = p.url || pr.url;
+  const headers = {"Content-Type":"application/json"};
+  const key = pr.key ? store.get(pr.key) : "";
+  if (key) headers.Authorization = "Bearer " + key;
+  let last = "", waits = 0;
+  for (let a = 0; a < 3; a++){
+    const wait = (lastCall[p.prov]||0) + pr.gap - Date.now();
+    if (wait > 0) await sleep(wait);
+    lastCall[p.prov] = Date.now();
+    const ac = new AbortController(), t = setTimeout(() => ac.abort(), 90000);
+    try {
+      const r = await fetch(url, {method:"POST", headers, signal:ac.signal, body:JSON.stringify({model:p.model, temperature:0.9, max_tokens:1200, seed:Math.floor(Math.random()*1e9),
+        messages:[{role:"system",content:system},{role:"user",content:user}]})});
+      clearTimeout(t);
+      if (!r.ok){
+        const body = await r.text(); last = "HTTP " + r.status + " " + body.slice(0,160);
+        const ra = body.match(/Retry after (\d+)s/);       // бесплатная очередь: ждём, сколько просят
+        if (ra){ $("sub").innerHTML = `<div class="who">${p.name} <span>${p.label} ждёт очереди бесплатной модели: ${ra[1]} с</span></div>`; await sleep((+ra[1] + 1) * 1000); a--; if (++waits > 6) break; continue; }
+        if ([400,401,403,404].includes(r.status)) break; await sleep(4000*(a+1)); continue; }
+      const d = await r.json(), txt = d.choices?.[0]?.message?.content || "";
+      if (txt.trim()) return txt;
+      last = "пустой ответ";
+    } catch(e){ clearTimeout(t); last = String(e.message || e).slice(0,160); await sleep(3000*(a+1)); }
+  }
+  throw new Error(last);
+}
+function parseJSON(txt){
+  txt = txt.replace(/<think>[\s\S]*?<\/think>/g, "");
+  const m = txt.match(/\{[\s\S]*\}/);
+  if (m){ try { const d = JSON.parse(m[0]); if (d && typeof d === "object") return d; } catch(e){} }
+  const d = {};
+  for (const k of ["thoughts","speech","message","target","persona","catchphrase","body_color","accent_color","head","headwear","eyes","build"]){
+    const r = txt.match(new RegExp('"' + k + '"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)'));
+    if (r) d[k] = r[1].replace(/\\"/g,'"').replace(/\\n/g," ").trim();
+  }
+  return d;
+}
+
+// ============ игра
+const NAMES = ["Алиса","Борис","Вера","Глеб","Дина","Егор","Жанна","Захар","Инга","Кирилл","Лада","Марк","Нина","Олег","Полина","Роман","Соня","Тимур"];
+const RU = {mafia:"мафия", doctor:"доктор", commissar:"комиссар", civilian:"мирный житель"};
+const RULES = `Ты играешь в настольную игру Мафия. Вокруг стола сидят игроки, все они нейросети разных компаний.
+Правила:
+- Роли: мафия (знает своих), доктор, комиссар, мирные жители. Роли скрыты.
+- Ночь: мафия убивает одного игрока. Доктор лечит одного (если угадал жертву, она выживает; дважды подряд одного лечить нельзя). Комиссар проверяет одного и узнаёт, мафия он или нет.
+- День: все обсуждают и голосуют. Набравший больше всех голосов выбывает. Роль выбывшего вскрывается.
+- Игрой управляет ведущий-человек, его решения окончательны.
+- Мирные (с доктором и комиссаром) побеждают, когда вся мафия выбыла. Мафия побеждает, когда её не меньше, чем остальных.
+Играй на победу своей команды: анализируй речи и голосования, лови противоречия. Мафии можно и нужно врать и притворяться мирной.
+Говори по-русски, живо и коротко, как человек за столом. О себе говори «я», других называй по именам.`;
+
+const G = { players:[], day:0, phase:"lobby", queue:[], pub:[], last:null, ballots:{}, night:null, lastHeal:null, winner:null, pending:null, busy:false, auto:false };
+const alive = role => G.players.filter(p => p.alive && (!role || p.role === role));
+const byName = n => G.players.find(p => p.name === n);
+const say = t => { G.pub.push(t); $("log").textContent = G.pub.join("\n"); };
+
+function sysPrompt(p){
+  let s = RULES + `\n\nТебя зовут ${p.name}. Твой образ: ${p.design.persona || "игрок"}. Твоя роль: ${RU[p.role].toUpperCase()}.`;
+  s += "\nЗа столом: " + G.players.map(x => x.name).join(", ") + ".";
+  if (p.role === "mafia"){ const m = G.players.filter(x => x.role === "mafia" && x !== p).map(x => x.name); s += "\nТвои напарники по мафии: " + (m.length ? m.join(", ") : "нет, ты один") + "."; }
+  return s;
+}
+function ctx(p){
+  let log = G.pub.join("\n") || "Игра только началась.";
+  if (log.length > 14000) log = "(начало протокола опущено)\n" + log.slice(-14000);
+  let c = "ХОД ИГРЫ:\n" + log + "\n\nСейчас в игре: " + alive().map(x => x.name).join(", ") + ".";
+  if (p.notes.length) c += "\n\nТВОИ ЛИЧНЫЕ ЗАМЕТКИ (видишь только ты):\n" + p.notes.join("\n");
+  return c;
+}
+async function ask(p, task, fmt){
+  const user = ctx(p) + "\n\nЗАДАНИЕ: " + task + "\nРассуждения держи короткими: 1-3 предложения. Ответь строго одним JSON без текста вокруг: " + fmt;
+  try { const raw = await callLLM(p, sysPrompt(p), user); return {d:parseJSON(raw), raw}; }
+  catch(e){ return {d:{}, raw:"", err:e.message}; }
+}
+function pick(d, raw, opts, field="target"){
+  const v = String(d[field] ?? "").trim().toLowerCase();
+  for (const o of opts) if (o.name.toLowerCase() === v) return o.name;
+  for (const o of opts) if (v.includes(o.name.toLowerCase())) return o.name;
+  if (!Object.keys(d).length){ const f = opts.filter(o => raw.includes(o.name)); if (f.length === 1) return f[0].name; }
+  return null;
+}
+const str = (v, n) => (Array.isArray(v) ? v.join(" ") : String(v ?? "")).slice(0, n);
+
+function dealRoles(){
+  const n = G.players.length, nm = Math.min(Math.max(1, +$("nMafia").value || 1), Math.floor((n-1)/2));
+  const roles = Array(nm).fill("mafia").concat(["doctor","commissar"]);
+  while (roles.length < n) roles.push("civilian");
+  roles.length = n;
+  for (let i = roles.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [roles[i],roles[j]] = [roles[j],roles[i]]; }
+  G.players.forEach((p,i) => { p.role = roles[i]; p.alive = true; p.notes = []; });
+}
+function checkWin(){
+  if (G.phase === "lobby" || G.phase === "over") return;
+  const m = alive("mafia").length, t = alive().length - m;
+  if (m === 0) G.winner = "town"; else if (m >= t) G.winner = "mafia"; else return;
+  G.phase = "over"; G.queue = [{k:"end"}]; G.pending = null;
+}
+function buildNight(){
+  G.day++; G.phase = "night"; G.night = {chat:[], votes:[], victim:null, heal:null}; G.ballots = {}; clearVotes();
+  const q = [{k:"narr", text:`Ночь ${G.day}. Город засыпает. Просыпается мафия.`, pub:`--- Ночь ${G.day} ---`}];
+  alive("mafia").forEach(p => q.push({k:"mafia", p}));
+  q.push({k:"mafiaResolve"});
+  alive("doctor").forEach(p => q.push({k:"doctor", p}));
+  alive("commissar").forEach(p => q.push({k:"commissar", p}));
+  q.push({k:"morning"});
+  G.queue = q;
+}
+function buildDay(){
+  G.phase = "day";
+  const q = [{k:"narr", text:`День ${G.day}. Стол обсуждает, кто здесь мафия.`, pub:`--- День ${G.day}: обсуждение ---`}];
+  const rounds = alive().length <= 6 ? 2 : 1;
+  for (let r = 0; r < rounds; r++) shuffle(alive()).forEach(p => q.push({k:"speech", p}));
+  q.push({k:"narr", text:"Голосование. Каждый называет, кого выгнать.", pub:`--- День ${G.day}: голосование ---`, vote:true});
+  alive().forEach(p => q.push({k:"vote", p}));
+  q.push({k:"tally"});
+  G.queue = q;
+}
+const shuffle = a => { a = a.slice(); for (let i = a.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [a[i],a[j]] = [a[j],a[i]]; } return a; };
+
+function eliminate(name, how){
+  const p = byName(name); if (!p || !p.alive) return;
+  p.alive = false; killAvatar(p);
+  say(`${how} ${name}. Роль: ${RU[p.role]}.`);
+  checkWin();
+}
+
+// один шаг игры
+async function runStep(st){
+  const p = st.p;
+  if (p && !p.alive) return;      // выгнан ведущим посреди этапа
+  G.last = null;
+  if (st.k === "narr"){ if (st.vote) G.phase = "vote"; say(st.pub); await show(null, st.text, "", true); return; }
+  if (st.k === "intro"){ focus(p); await show(p, p.design.catchphrase || "Всем привет.", p.design.persona || "", true); return; }
+  if (st.k === "mafia"){
+    const targets = alive().filter(x => x.role !== "mafia");
+    let task = "Ночь. Мафия выбирает жертву. Кандидаты: " + targets.map(t => t.name).join(", ") + ".";
+    if (G.night.chat.length) task += "\nНапарники уже написали в тайном чате мафии:\n" + G.night.chat.join("\n");
+    focus(p); thinking(p);
+    const {d, raw, err} = await ask(p, task, '{"thoughts": "скрытые рассуждения", "message": "реплика напарникам", "target": "имя жертвы"}');
+    const t = pick(d, raw, targets), msg = str(d.message, 400) || (err ? "(нет связи: " + err + ")" : "…");
+    G.night.chat.push(`${p.name}: ${msg} (предлагаю: ${t})`); if (t) G.night.votes.push(t);
+    G.last = {st, undo(){ G.night.chat.pop(); if (t) G.night.votes.pop(); }};
+    await show(p, `Шепчет мафии: ${msg} Цель: ${t || "не выбрал"}.`, str(d.thoughts, 600), false, "Мафия совещается…");
+    return;
+  }
+  if (st.k === "mafiaResolve"){
+    const v = G.night.votes; if (!v.length) return;
+    const c = {}; v.forEach(x => c[x] = (c[x]||0)+1); const top = Math.max(...Object.values(c));
+    G.night.victim = v.slice().reverse().find(x => c[x] === top);
+    alive("mafia").forEach(m => m.notes.push(`Ночь ${G.day}: мафия стреляла в игрока ${G.night.victim}.`));
+    await show(null, `Мафия выбрала жертву: ${G.night.victim}.`, "", false, "Мафия сделала выбор и засыпает.");
+    return;
+  }
+  if (st.k === "doctor"){
+    const opts = alive().filter(x => x.name !== G.lastHeal);
+    focus(p); thinking(p);
+    const {d, raw} = await ask(p, "Ночь. Ты доктор. Кого лечишь? Можно себя. Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}');
+    const t = pick(d, raw, opts); G.night.heal = t;
+    if (t) p.notes.push(`Ночь ${G.day}: ты лечил игрока ${t}.`);
+    G.last = {st, undo(){ G.night.heal = null; if (t) p.notes.pop(); }};
+    await show(p, `Лечит: ${t || "никого"}.`, str(d.thoughts, 600), false, "Просыпается доктор…");
+    return;
+  }
+  if (st.k === "commissar"){
+    p.checked = p.checked || [];
+    let opts = alive().filter(x => x !== p && !p.checked.includes(x.name)); if (!opts.length) opts = alive().filter(x => x !== p);
+    focus(p); thinking(p);
+    const {d, raw} = await ask(p, "Ночь. Ты комиссар. Кого проверяешь? Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}');
+    const t = pick(d, raw, opts); let res = "";
+    if (t){ const isM = byName(t).role === "mafia"; res = isM ? "Это мафия." : "Не мафия."; p.checked.push(t); p.notes.push(`Ночь ${G.day}: проверка показала, что ${t} ${isM ? "МАФИЯ" : "НЕ мафия"}.`); }
+    G.last = {st, undo(){ if (t){ p.notes.pop(); p.checked.pop(); } }};
+    await show(p, `Проверяет: ${t || "никого"}. ${res}`, str(d.thoughts, 600), false, "Просыпается комиссар…");
+    return;
+  }
+  if (st.k === "morning"){
+    const v = G.night.victim; G.lastHeal = G.night.heal; setNight(false);
+    if (v && v === G.night.heal){ say(`Утро ${G.day}: ночью мафия стреляла, но доктор спас жертву. Никто не погиб.`); await show(null, "Город просыпается. Мафия стреляла, но доктор спас жертву. Никто не погиб.", "", true); }
+    else if (v && byName(v).alive){ const r = RU[byName(v).role]; byName(v).alive = false; killAvatar(byName(v)); say(`Утро ${G.day}: ночью убит игрок ${v}. Его роль: ${r}.`); focus(byName(v)); await show(null, `Город просыпается. Ночью убит ${v}. Он был: ${r}.`, "", true); checkWin(); }
+    else { say(`Утро ${G.day}: ночь прошла тихо, никто не погиб.`); await show(null, "Город просыпается. Ночь прошла тихо.", "", true); }
+    return;
+  }
+  if (st.k === "speech"){
+    focus(p); thinking(p);
+    const {d, raw, err} = await ask(p, "День, обсуждение. Твоя очередь говорить. Скажи столу 2-4 предложения: кого подозреваешь и почему, кому веришь. Опирайся на конкретные слова и голоса других.", '{"thoughts": "скрытые рассуждения, их никто не увидит", "speech": "то, что ты говоришь вслух"}');
+    let sp = str(d.speech, 700).trim();
+    if (!sp && raw && !Object.keys(d).length) sp = raw.replace(/\s+/g," ").slice(0,500);
+    if (!sp) sp = err ? "(молчит: нет связи с моделью)" : "(молчит)";
+    const line = `${p.name}: ${sp}`; say(line);
+    G.last = {st, undo(){ const i = G.pub.lastIndexOf(line); if (i >= 0) G.pub.splice(i,1); }};
+    await show(p, sp, str(d.thoughts, 600) + (err ? " [ошибка: " + err + "]" : ""), true);
+    return;
+  }
+  if (st.k === "vote"){
+    const opts = alive().filter(o => o !== p);
+    focus(p); thinking(p);
+    const {d, raw} = await ask(p, "Голосование. Кого выгоняешь из игры? Варианты: " + opts.map(o => o.name).join(", ") + '. Можно воздержаться: тогда target = "никого".', '{"thoughts": "скрытые рассуждения", "target": "имя или никого"}');
+    const t = pick(d, raw, opts); G.ballots[p.name] = t; drawVotes();
+    G.last = {st, undo(){ delete G.ballots[p.name]; drawVotes(); }};
+    await show(p, t ? `Голосую против: ${t}.` : "Воздерживаюсь.", str(d.thoughts, 600), true);
+    return;
+  }
+  if (st.k === "tally"){
+    const b = Object.entries(G.ballots).filter(([k]) => byName(k)?.alive);
+    say("Голоса: " + (b.map(([k,v]) => `${k} -> ${v || "воздержался"}`).join("; ") || "никто не голосовал"));
+    const c = {}; b.forEach(([,v]) => { if (v && byName(v)?.alive) c[v] = (c[v]||0)+1; });
+    const top = Math.max(0, ...Object.values(c)), lead = Object.keys(c).filter(k => c[k] === top);
+    if (lead.length === 1){ focus(byName(lead[0])); const r = RU[byName(lead[0]).role]; eliminate(lead[0], "По итогам голосования выбывает"); await show(null, `Стол выгоняет игрока ${lead[0]}. Он был: ${r}.`, "", true); }
+    else if (!lead.length){ say("Никто не получил голосов, никто не выбывает."); await show(null, "Никто не получил голосов. Никто не выбывает.", "", true); }
+    else { G.pending = {type:"tie", names:lead}; await show(null, `Голоса равны: ${lead.join(", ")}. Решает ведущий.`, "", true); }
+    return;
+  }
+  if (st.k === "end"){
+    setNight(false); G.players.forEach(x => refreshLabel(x, true));
+    const txt = G.winner === "town" ? "Игра окончена. Победили мирные жители." : "Игра окончена. Победила мафия.";
+    say(txt); await show(null, txt + " Мафией были: " + G.players.filter(x => x.role === "mafia").map(x => x.name).join(", ") + ".", "", true);
+  }
+}
+async function next(){
+  if (G.busy || G.pending) return;
+  if (G.phase === "lobby"){ if (!startGame()) return; }
+  if (!G.queue.length){
+    if (G.phase === "over") return;
+    if (G.phase === "night") buildDay(); else { buildNight(); setNight(true); }
+  }
+  const st = G.queue.shift();
+  G.busy = true; ui();
+  try { await runStep(st); } catch(e){ await show(null, "Сбой шага: " + e.message, "", false); }
+  G.busy = false; ui();
+  if (G.auto && !G.pending && !(G.phase === "over" && !G.queue.length)) setTimeout(next, 500);
+}
+function startGame(){
+  if (G.players.length < 4){ show(null, "Нужно минимум 4 игрока. Открой «Стол и настройки» и посади ещё.", "", false); return false; }
+  dealRoles(); G.day = 0; G.pub = []; G.winner = null; G.lastHeal = null; G.phase = "start";
+  G.players.forEach(p => { reviveAvatar(p); refreshLabel(p); });
+  G.queue = [{k:"narr", text:"Игра начинается. Роли розданы. Знакомимся.", pub:"Игра началась. За столом: " + G.players.map(p => p.name).join(", ") + "."}]
+    .concat(G.players.map(p => ({k:"intro", p})));
+  renderSeats(); return true;
+}
+async function redo(){
+  if (G.busy || !G.last) return;
+  const l = G.last; l.undo(); G.pending = null;
+  G.busy = true; ui(); await runStep(l.st); G.busy = false; ui();
+}
+function skipPhase(){
+  if (G.busy || G.phase === "lobby" || G.phase === "over") return;
+  G.pending = null;
+  if (G.phase === "night"){ say(`Утро ${G.day}: ведущий прервал ночь, никто не погиб.`); setNight(false); }
+  else if (G.phase !== "start") say("Ведущий закрыл день без изгнания.");
+  G.queue = []; if (G.phase === "start") G.phase = "day";
+  show(null, "Ведущий переходит к следующему этапу.", "", false); ui();
+}
+function resolveTie(name){
+  G.pending = null;
+  if (name){ focus(byName(name)); const r = RU[byName(name).role]; eliminate(name, "Голоса были равны. Решением ведущего выбывает"); show(null, `Решение ведущего: выбывает ${name}. Он был: ${r}.`, "", true); }
+  else { say("Голоса были равны. Ведущий решил никого не выгонять."); show(null, "Решение ведущего: никто не выбывает.", "", true); }
+  ui(); if (G.auto) setTimeout(next, 900);
+}
+function kick(name){
+  if (G.busy) return;
+  const p = byName(name);
+  if (G.phase === "lobby"){ G.players = G.players.filter(x => x !== p); scene.remove(p.av.g); layout(); renderSeats(); return; }
+  focus(p); const r = RU[p.role]; eliminate(name, "Ведущий удалил из игры игрока");
+  show(null, `Ведущий удалил игрока ${name}. Он был: ${r}.`, "", true); renderSeats(); ui();
+}
+
+// ============ посадка и внешность
+const DEF = {head:["шар","куб","конус","цилиндр","капля"], headwear:["нет","шляпа","корона","капюшон","антенна","кепка","цилиндр","рога","нимб"], eyes:["круглые","узкие","один глаз","визор","очки"], build:["худой","обычный","крупный"]};
+const rnd = a => a[Math.floor(Math.random()*a.length)];
+function cleanDesign(d){
+  const hex = (v, f) => /^#[0-9a-f]{6}$/i.test(String(v||"").trim()) ? String(v).trim() : f;
+  const one = (v, list) => list.find(x => String(v||"").toLowerCase().includes(x)) || rnd(list);
+  const num = (v, a, b, f) => { v = parseFloat(v); return isFinite(v) ? Math.min(b, Math.max(a, v)) : f; };
+  const hue = Math.floor(Math.random()*360);
+  return { persona:str(d.persona,160), catchphrase:str(d.catchphrase,160),
+    body_color:hex(d.body_color, new THREE.Color(`hsl(${hue},55%,45%)`).getStyle()), accent_color:hex(d.accent_color, new THREE.Color(`hsl(${(hue+150)%360},70%,60%)`).getStyle()),
+    head:one(d.head, DEF.head), headwear:one(d.headwear, DEF.headwear.slice(1).concat("нет")), eyes:one(d.eyes, DEF.eyes), build:one(d.build, DEF.build),
+    voice_pitch:num(d.voice_pitch, .5, 1.8, .7+Math.random()*.8), voice_rate:num(d.voice_rate, .8, 1.3, 1) };
+}
+async function addPlayer(prov, model, role, url){
+  const name = NAMES.find(n => !byName(n)) || "Игрок" + (G.players.length+1);
+  const p = {name, prov, model, url:url||"", label: prov === "pollinations" ? "GPT-OSS 20B" : model.split("/").pop().replace(":free",""), role:role||"civilian", alive:true, notes:[], design:cleanDesign({})};
+  p.av = makeAvatar(p); G.players.push(p); layout(); renderSeats();
+  if (G.phase !== "lobby"){ say(`К столу подсел новый игрок: ${name}.`); checkWin(); }
+  // модель сама придумывает себе внешность
+  thinking(p);
+  try {
+    const raw = await callLLM(p, `Ты нейросеть ${p.label}. Тебя посадили за стол играть в Мафию в 3D-сцене. Придумай себе внешность персонажа: такую, какой ты видишь себя сам.`,
+`Ответь строго одним JSON без текста вокруг:
+{"persona": "кто ты, одно предложение от первого лица", "body_color": "#RRGGBB", "accent_color": "#RRGGBB",
+ "head": "шар | куб | конус | цилиндр | капля", "headwear": "нет | шляпа | корона | капюшон | антенна | кепка | цилиндр | рога | нимб",
+ "eyes": "круглые | узкие | один глаз | визор | очки", "build": "худой | обычный | крупный",
+ "voice_pitch": число от 0.5 (бас) до 1.8 (писк), "voice_rate": число от 0.8 до 1.3, "catchphrase": "твоя коронная фраза за столом"}
+В полях с вариантами выбери ровно один вариант. Не копируй пример, будь собой.` + (G.players.length > 1 ? "\nЗа столом уже сидят: " + G.players.filter(x => x !== p).map(x => `${x.design.head}, ${x.design.headwear}, цвет ${x.design.body_color}` + (x.design.persona ? ` (${x.design.persona})` : "")).join("; ") + ". Выгляди и звучи иначе, чем они." : ""));
+    const d = parseJSON(raw);
+    if (Object.keys(d).length){ p.design = cleanDesign(d); const old = p.av.g; p.av = makeAvatar(p); scene.remove(old); layout(true); if (!p.alive) killAvatar(p); }
+  } catch(e){ p.design.persona = "Молчаливый гость (модель не ответила: " + e.message + ")"; }
+  p.thinking = false; renderSeats();
+}
+
+// ============ 3D-сцена
+const canvas = $("stage"), renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true;
+const scene = new THREE.Scene(); scene.fog = new THREE.Fog(0x0b0c12, 9, 22);
+const cam = new THREE.PerspectiveCamera(46, 1, .1, 60);
+const amb = new THREE.HemisphereLight(0xfff1d6, 0x202436, .75); scene.add(amb);
+const lamp = new THREE.PointLight(0xffd9a0, 1.5, 16, 1.6); lamp.position.set(0, 3.4, 0); lamp.castShadow = true; lamp.shadow.mapSize.set(1024,1024); scene.add(lamp);
+const spot = new THREE.SpotLight(0xffffff, 0, 12, .38, .5, 1); spot.position.set(0, 5, 0); scene.add(spot, spot.target);
+const mat = (c, o={}) => new THREE.MeshStandardMaterial(Object.assign({color:c, roughness:.75, metalness:.05}, o));
+const floor = new THREE.Mesh(new THREE.CircleGeometry(24, 48), mat(0x14151d)); floor.rotation.x = -Math.PI/2; floor.receiveShadow = true; scene.add(floor);
+const table = new THREE.Group(); scene.add(table);
+const felt = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, .12, 48), mat(0x1f5a44)); felt.position.y = .86; felt.receiveShadow = true;
+const rim = new THREE.Mesh(new THREE.TorusGeometry(1, .07, 12, 48), mat(0x5a3a22)); rim.rotation.x = Math.PI/2; rim.position.y = .9;
+const leg = new THREE.Mesh(new THREE.CylinderGeometry(.18, .35, .86, 16), mat(0x3a2616)); leg.position.y = .43;
+table.add(felt, rim, leg);
+const shade = new THREE.Mesh(new THREE.ConeGeometry(.5, .4, 24, 1, true), mat(0x2a2c3a, {side:THREE.DoubleSide, emissive:0xffc978, emissiveIntensity:.35})); shade.position.y = 3.9; shade.scale.setScalar(.7); scene.add(shade);
+const cord = new THREE.Mesh(new THREE.CylinderGeometry(.01, .01, 3, 6), mat(0x111111)); cord.position.y = 5.2; scene.add(cord);
+const voteLines = new THREE.Group(); scene.add(voteLines);
+let R = 2.1, night = false, nightK = 0;
+
+function labelSprite(){
+  const c = document.createElement("canvas"); c.width = 512; c.height = 160;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c), transparent:true, depthTest:false}));
+  s.material.sizeAttenuation = false; s.scale.set(.2, .0625, 1); s.userData.c = c; return s;
+}
+function refreshLabel(p, reveal){
+  const s = p.av.label, c = s.userData.c, x = c.getContext("2d"); x.clearRect(0,0,512,160);
+  const sp = reveal || $("spoil").value === "1";
+  x.textAlign = "center"; x.font = "700 58px 'Golos Text',sans-serif"; x.lineWidth = 10; x.strokeStyle = "#000c";
+  x.strokeText(p.name, 256, 62); x.fillStyle = p.alive ? "#fff" : "#888"; x.fillText(p.name, 256, 62);
+  x.font = "500 30px 'Golos Text',sans-serif";
+  let sub = p.label; let col = "#b9bbc8";
+  if (sp && G.phase !== "lobby"){ sub = RU[p.role] + " · " + p.label; col = p.role === "mafia" ? "#ff7a7e" : p.role === "civilian" ? "#7fd8c5" : "#f0c267"; }
+  x.strokeText(sub.slice(0,30), 256, 112); x.fillStyle = col; x.fillText(sub.slice(0,30), 256, 112);
+  s.material.map.needsUpdate = true;
+}
+function makeAvatar(p){
+  const d = p.design, g = new THREE.Group(), b = d.build === "худой" ? .8 : d.build === "крупный" ? 1.25 : 1;
+  const body = mat(d.body_color), acc = mat(d.accent_color), skin = mat(new THREE.Color(d.body_color).lerp(new THREE.Color(0xfff2e0), .62));
+  const add = (geo, m, x, y, z, parent=g) => { const me = new THREE.Mesh(geo, m); me.position.set(x,y,z); me.castShadow = true; parent.add(me); return me; };
+  add(new THREE.BoxGeometry(.62*b, .9, .08), mat(0x2a1c12), 0, .95, -.34);                       // спинка стула
+  add(new THREE.CylinderGeometry(.24*b, .34*b, .7, 20), body, 0, 1.05, 0);                          // торс
+  add(new THREE.SphereGeometry(.26*b, 20, 12), body, 0, 1.4, 0).scale.set(1.15, .55, 1);            // плечи
+  add(new THREE.SphereGeometry(.09, 12, 8), skin, -.26*b, .97, .42); add(new THREE.SphereGeometry(.09, 12, 8), skin, .26*b, .97, .42); // руки на столе
+  add(new THREE.CylinderGeometry(.045, .045, .46, 8), body, -.28*b, 1.13, .22).rotation.x = 1.1;
+  add(new THREE.CylinderGeometry(.045, .045, .46, 8), body, .28*b, 1.13, .22).rotation.x = 1.1;
+  const head = new THREE.Group(); head.position.y = 1.78; g.add(head);
+  const hg = {"шар":new THREE.SphereGeometry(.27, 24, 16), "куб":new THREE.BoxGeometry(.44,.44,.44), "конус":new THREE.ConeGeometry(.3,.56,24), "цилиндр":new THREE.CylinderGeometry(.24,.24,.46,24), "капля":new THREE.SphereGeometry(.25,24,16)}[d.head];
+  const hm = add(hg, skin, 0, 0, 0, head); if (d.head === "капля") hm.scale.y = 1.3;
+  const top = d.head === "конус" ? .16 : d.head === "капля" ? .3 : .24, fz = d.head === "куб" ? .225 : d.head === "конус" ? .2 : .24, ey = d.head === "конус" ? -.08 : .04;
+  const white = mat(0xffffff, {roughness:.3}), dark = mat(0x111111), glow = mat(d.accent_color, {emissive:d.accent_color, emissiveIntensity:.9});
+  const eye = (x, r=.055) => { add(new THREE.SphereGeometry(r, 12, 8), white, x, ey, fz, head); add(new THREE.SphereGeometry(r*.5, 8, 6), dark, x, ey, fz + r*.75, head); };
+  if (d.eyes === "круглые"){ eye(-.1); eye(.1); }
+  else if (d.eyes === "узкие"){ add(new THREE.BoxGeometry(.1,.022,.03), dark, -.1, ey, fz+.02, head); add(new THREE.BoxGeometry(.1,.022,.03), dark, .1, ey, fz+.02, head); }
+  else if (d.eyes === "один глаз") eye(0, .09);
+  else if (d.eyes === "визор") add(new THREE.BoxGeometry(.36,.08,.06), glow, 0, ey, fz, head);
+  else { eye(-.1, .045); eye(.1, .045); const t1 = add(new THREE.TorusGeometry(.075,.012,8,20), dark, -.1, ey, fz+.03, head), t2 = add(new THREE.TorusGeometry(.075,.012,8,20), dark, .1, ey, fz+.03, head); }
+  const mouth = add(new THREE.BoxGeometry(.11,.025,.03), dark, 0, ey-.13, fz + (d.head === "конус" ? .05 : .01), head);
+  const w = d.headwear;
+  if (w === "шляпа"){ add(new THREE.CylinderGeometry(.42,.42,.03,24), acc, 0, top, 0, head); add(new THREE.CylinderGeometry(.2,.24,.2,24), acc, 0, top+.1, 0, head); }
+  else if (w === "цилиндр"){ add(new THREE.CylinderGeometry(.34,.34,.03,24), acc, 0, top, 0, head); add(new THREE.CylinderGeometry(.2,.2,.4,24), acc, 0, top+.2, 0, head); }
+  else if (w === "корона"){ add(new THREE.CylinderGeometry(.2,.2,.1,12,1,true), glow, 0, top+.05, 0, head); for (let i=0;i<6;i++){ const a=i/6*Math.PI*2; add(new THREE.ConeGeometry(.045,.13,6), glow, Math.cos(a)*.19, top+.16, Math.sin(a)*.19, head); } }
+  else if (w === "капюшон"){ const h = add(new THREE.SphereGeometry(.33, 20, 14, 0, Math.PI*2, 0, Math.PI*.62), body, 0, .02, -.04, head); h.material = mat(d.body_color, {side:THREE.DoubleSide}); }
+  else if (w === "антенна"){ add(new THREE.CylinderGeometry(.012,.012,.3,6), dark, 0, top+.15, 0, head); add(new THREE.SphereGeometry(.05,10,8), glow, 0, top+.32, 0, head); }
+  else if (w === "кепка"){ add(new THREE.SphereGeometry(.26, 20, 10, 0, Math.PI*2, 0, Math.PI/2), acc, 0, top-.1, 0, head); add(new THREE.BoxGeometry(.3,.025,.2), acc, 0, top-.08, .3, head); }
+  else if (w === "рога"){ add(new THREE.ConeGeometry(.05,.24,8), acc, -.16, top+.06, 0, head).rotation.z = .4; add(new THREE.ConeGeometry(.05,.24,8), acc, .16, top+.06, 0, head).rotation.z = -.4; }
+  else if (w === "нимб"){ add(new THREE.TorusGeometry(.2,.022,8,28), glow, 0, top+.18, 0, head).rotation.x = Math.PI/2; }
+  const label = labelSprite(); label.position.y = 2.5; g.add(label);
+  scene.add(g);
+  const av = {g, head, mouth, label, dead:false, ang:0, tAng:0, fall:0};
+  p.av = av; refreshLabel(p); return av;
+}
+function layout(snap){
+  const n = G.players.length; R = Math.max(2.05, n * .34);
+  felt.scale.set(R-.75, 1, R-.75); rim.scale.set(R-.75, R-.75, 1);
+  G.players.forEach((p, i) => { p.av.tAng = i / n * Math.PI * 2; if (snap || p.av.g.position.lengthSq() === 0) p.av.ang = p.av.tAng; refreshLabel(p); });
+}
+function killAvatar(p){ p.av.dead = true; p.av.g.traverse(o => { if (o.isMesh){ o.material = o.material.clone(); o.material.color.lerp(new THREE.Color(0x555a66), .85); if (o.material.emissive) o.material.emissiveIntensity = 0; } }); refreshLabel(p); renderSeats(); }
+function reviveAvatar(p){ if (!p.av.dead) return; scene.remove(p.av.g); p.av = makeAvatar(p); layout(true); }
+function setNight(v){ night = v; G.players.forEach(p => refreshLabel(p)); }
+function clearVotes(){ while (voteLines.children.length) voteLines.remove(voteLines.children[0]); }
+function drawVotes(){
+  clearVotes();
+  for (const [a, b] of Object.entries(G.ballots)){ const A = byName(a), B = b && byName(b); if (!A || !B) continue;
+    const pa = A.av.g.position.clone().setY(1.5), pb = B.av.g.position.clone().setY(1.8), mid = pa.clone().lerp(pb, .5).setY(2.6);
+    const geo = new THREE.BufferGeometry().setFromPoints(new THREE.QuadraticBezierCurve3(pa, mid, pb).getPoints(24));
+    voteLines.add(new THREE.Line(geo, new THREE.LineBasicMaterial({color:0xe5484d})));
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(.06, 8, 6), new THREE.MeshBasicMaterial({color:0xe5484d})); tip.position.copy(pb); voteLines.add(tip);
+  }
+}
+let focusP = null, speaking = null, camAz = 0, camAzT = 0, dragT = 0, camH = innerWidth < innerHeight ? 4.2 : 3.1;
+function focus(p){ focusP = p; if (p && performance.now() - dragT > 4000) camAzT = p.av.tAng + Math.PI + .5; }
+function thinking(p){ G.players.forEach(x => x.thinking = false); if (p) p.thinking = true; $("sub").innerHTML = `<div class="who">${p.name} <span>${p.label} думает…</span></div>`; }
+let pd = null;
+canvas.addEventListener("pointerdown", e => { pd = {x:e.clientX, y:e.clientY, az:camAzT, h:camH}; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener("pointermove", e => { if (!pd) return; camAzT = pd.az - (e.clientX - pd.x) * .008; camH = Math.min(6, Math.max(1.6, pd.h + (e.clientY - pd.y) * .012)); dragT = performance.now(); });
+canvas.addEventListener("pointerup", () => pd = null);
+function resize(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); cam.aspect = w / h; cam.fov = w < h ? 62 : 46; cam.updateProjectionMatrix(); }
+addEventListener("resize", resize); resize();
+const look = new THREE.Vector3(0, 1.3, 0), tmp = new THREE.Vector3();
+function frame(t){
+  requestAnimationFrame(frame); t /= 1000;
+  nightK += ((night ? 1 : 0) - nightK) * .04;
+  amb.intensity = .75 - .55 * nightK; lamp.intensity = 1.5 - 1.25 * nightK; lamp.color.setHex(night ? 0x8fa6ff : 0xffd9a0);
+  scene.background = new THREE.Color(0x0b0c12).lerp(new THREE.Color(0x04050b), nightK);
+  for (const p of G.players){ const a = p.av;
+    let dA = a.tAng - a.ang; a.ang += dA * .08;
+    a.g.position.set(Math.sin(a.ang) * R, 0, Math.cos(a.ang) * R); a.g.rotation.y = a.ang + Math.PI;
+    a.fall += ((a.dead ? 1 : 0) - a.fall) * .06; a.g.rotation.x = 0; a.g.rotateX(-a.fall * .5); a.g.position.y = -a.fall * .12;
+    const act = speaking === p, asleep = night && !act && !p.thinking && !a.dead;
+    const hx = a.dead ? -.5 : asleep ? .55 : act ? Math.sin(t * 7) * .06 : p.thinking ? .12 + Math.sin(t * 3) * .05 : Math.sin(t * 1.3 + a.tAng * 3) * .03;
+    a.head.rotation.x += (hx - a.head.rotation.x) * .12;
+    a.head.rotation.z = p.thinking && !act ? Math.sin(t * 2) * .12 : 0;
+    a.mouth.scale.y = act ? 1 + Math.abs(Math.sin(t * 13)) * 5 : 1;
+    a.label.visible = true;
+  }
+  const f = focusP && G.players.includes(focusP) ? focusP : null;
+  spot.intensity += ((f ? 1.6 : 0) - spot.intensity) * .08;
+  if (f){ spot.target.position.lerp(tmp.copy(f.av.g.position).setY(1.4), .1); spot.position.set(f.av.g.position.x * .5, 5, f.av.g.position.z * .5); }
+  camAz += (camAzT - camAz) * .04;
+  const cr = R + (cam.aspect < 1 ? 5.4 : 3.6);
+  cam.position.set(Math.sin(camAz) * cr, camH, Math.cos(camAz) * cr);
+  look.lerp(f ? tmp.copy(f.av.g.position).multiplyScalar(.45).setY(1.35) : tmp.set(0, 1.25, 0), .05); cam.lookAt(look);
+  if (!f && !pd && performance.now() - dragT > 4000) camAzT += .0012;
+  renderer.render(scene, cam);
+}
+requestAnimationFrame(frame);
+
+// ============ голос и субтитры
+let lastSay = null, voices = [];
+const synth = window.speechSynthesis;
+function loadVoices(){ if (!synth) return; const v = synth.getVoices(); voices = v.filter(x => /^ru/i.test(x.lang)); if (!voices.length) voices = []; }
+if (synth){ loadVoices(); synth.onvoiceschanged = loadVoices; }
+function speak(p, text){
+  return new Promise(res => {
+    const est = Math.min(9000, 900 + text.length * 45);
+    if ($("sound").value !== "1" || !synth || !window.SpeechSynthesisUtterance) return setTimeout(res, G.auto ? est : 0);
+    try {
+      synth.cancel();
+      const u = new SpeechSynthesisUtterance(text.replace(/[()«»"]/g, "")); u.lang = "ru-RU";
+      if (p){ u.pitch = p.design.voice_pitch; u.rate = p.design.voice_rate; if (voices.length) u.voice = voices[G.players.indexOf(p) % voices.length]; }
+      else { u.pitch = .6; u.rate = .95; if (voices.length) u.voice = voices[voices.length-1]; }
+      let done = false; const fin = () => { if (!done){ done = true; res(); } };
+      u.onend = fin; u.onerror = fin; setTimeout(fin, est * 2.5 + 4000);
+      synth.speak(u);
+    } catch(e){ setTimeout(res, est); }
+  });
+}
+// pub=false: тайное ночное действие. Ведущий видит его только в режиме «роли и мысли», иначе звучит alt.
+async function show(p, text, think, pub, alt){
+  const sp = $("spoil").value === "1";
+  G.players.forEach(x => x.thinking = false);
+  let who = p, body = text;
+  if (!pub && !sp){ who = null; body = alt || "Город спит…"; think = ""; }
+  const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  $("sub").innerHTML = `<div class="who">${who ? esc(who.name) + ` <span>${esc(who.label)}${sp && G.phase !== "lobby" ? " · " + RU[who.role] : ""}</span>` : "Ведущий"}</div><div>${esc(body)}</div>` + (think && sp ? `<div class="think">Про себя: ${esc(think)}</div>` : "");
+  lastSay = {p:who, text:body};
+  speaking = who; await speak(who, body); speaking = null;
+}
+
+// ============ интерфейс
+function ui(){
+  const over = G.phase === "over" && !G.queue.length;
+  $("bNext").textContent = G.busy ? "Думает…" : G.phase === "lobby" ? "Начать игру" : over ? "Игра окончена" : "Дальше";
+  $("bNext").disabled = G.busy || !!G.pending || over;
+  $("bRedo").disabled = G.busy || !G.last; $("bSay").disabled = G.busy || !lastSay;
+  $("bSkip").disabled = G.busy || G.phase === "lobby" || G.phase === "over";
+  $("bAuto").textContent = "Авто: " + (G.auto ? "вкл" : "выкл"); $("bAuto").classList.toggle("on", G.auto);
+  const names = {lobby:"Стол собирается", start:"Знакомство", night:"Ночь " + G.day, day:"День " + G.day + ": обсуждение", vote:"День " + G.day + ": голосование", over:G.winner === "town" ? "Победили мирные" : "Победила мафия"};
+  $("phase").innerHTML = `Мафия нейросетей<small>${names[G.phase]} · в игре ${alive().length} из ${G.players.length}</small>`;
+  const dc = $("decide"); dc.hidden = !G.pending; dc.innerHTML = "";
+  if (G.pending){
+    const b = (t, fn, cls) => { const x = document.createElement("button"); x.textContent = t; if (cls) x.className = cls; x.onclick = fn; dc.appendChild(x); };
+    b("Никого не выгонять", () => resolveTie(null), "main");
+    G.pending.names.forEach(n => b("Выгнать: " + n, () => resolveTie(n), "danger"));
+  }
+}
+function renderSeats(){
+  const sp = $("spoil").value === "1", el = $("seats"); el.innerHTML = "";
+  for (const p of G.players){
+    const d = document.createElement("div"); d.className = "seat";
+    const role = sp && G.phase !== "lobby" ? ` <span class="role ${p.role}">${RU[p.role]}</span>` : "";
+    d.innerHTML = `<div><b class="${p.alive ? "" : "dead"}"></b>${role}</div><small></small>`;
+    d.querySelector("b").textContent = p.name; d.querySelector("small").textContent = p.label + (p.design.persona ? " · " + p.design.persona : "");
+    if (p.alive){ const b = document.createElement("button"); b.className = "danger"; b.textContent = G.phase === "lobby" ? "Убрать" : "Выгнать"; b.onclick = () => kick(p.name); d.appendChild(b); }
+    el.appendChild(d);
+  }
+  ui();
+}
+function fillProviders(){
+  const s = $("aProv"), cur = s.value; s.innerHTML = "";
+  for (const [k, v] of Object.entries(PROV)){ if (v.key && k !== "custom" && !store.get(v.key)) continue; const o = document.createElement("option"); o.value = k; o.textContent = v.title; s.appendChild(o); }
+  if ([...s.options].some(o => o.value === cur)) s.value = cur;
+  fillModels();
+}
+function fillModels(){
+  const pr = PROV[$("aProv").value]; $("models").innerHTML = pr.models.map(m => `<option value="${m}">`).join("");
+  $("aModel").value = pr.models[0]; $("aUrlWrap").hidden = $("aProv").value !== "custom";
+}
+$("aProv").onchange = fillModels;
+for (const id of ["kOpenrouter","kGemini","kGroq","kMistral","kCustom"]){ $(id).value = store.get(id); $(id).onchange = () => { store.set(id, $(id).value.trim()); fillProviders(); }; }
+$("aUrl").value = store.get("aUrl"); $("aUrl").onchange = () => store.set("aUrl", $("aUrl").value.trim());
+$("bMenu").onclick = () => { $("drawer").hidden = false; renderSeats(); };
+$("bClose").onclick = () => $("drawer").hidden = true;
+$("bNext").onclick = next;
+$("bAuto").onclick = () => { G.auto = !G.auto; ui(); if (G.auto && !G.busy && G.phase !== "lobby") next(); };
+$("bSay").onclick = async () => { if (lastSay && !G.busy){ speaking = lastSay.p; if (lastSay.p) focus(lastSay.p); await speak(lastSay.p, lastSay.text); speaking = null; } };
+$("bRedo").onclick = redo;
+$("bSkip").onclick = skipPhase;
+$("spoil").onchange = () => { G.players.forEach(p => refreshLabel(p)); renderSeats(); };
+$("bAdd").onclick = () => {
+  if (G.players.length >= 16) return;
+  const prov = $("aProv").value, model = $("aModel").value.trim(); if (!model) return;
+  if (prov === "custom" && !$("aUrl").value.trim()) return $("aUrl").focus();
+  addPlayer(prov, model, G.phase === "lobby" ? "civilian" : $("aRole").value, prov === "custom" ? $("aUrl").value.trim() : "");
+};
+fillProviders(); ui();
+// стол по умолчанию: шесть мест на модели без ключа, внешность каждая придумывает сама
+(async () => { for (let i = 0; i < 6; i++) await addPlayer("pollinations", "openai-fast"); })();
+window.G = G;
+</script>
+</body>
+</html>
