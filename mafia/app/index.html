@@ -179,8 +179,8 @@ const NAMES = ["Алиса","Борис","Вера","Глеб","Дина","Ег�
 const RU = {mafia:"мафия", doctor:"доктор", commissar:"комиссар", civilian:"мирный житель"};
 const RULES = `Ты играешь в настольную игру Мафия. За столом сидят нейросети разных компаний, каждая под своим настоящим именем. Ведущий: человек, его решения окончательны.
 Правила:
-- Роли: мафия (знает своих), доктор, комиссар, мирные жители. Роли скрыты.
-- Ночь: мафия убивает одного игрока. Доктор лечит одного (если угадал жертву, она выживает; дважды подряд одного лечить нельзя). Комиссар проверяет одного и узнаёт, мафия он или нет.
+- Роли: мафия (знает своих), один доктор, один комиссар, остальные мирные жители. Двух докторов или двух комиссаров не бывает. Роли скрыты.
+- Ночь: мафия убивает одного игрока. Доктор лечит одного (если угадал жертву, она выживает; дважды подряд одного лечить нельзя). Комиссар в первую ночь только проверяет одного игрока и узнаёт, мафия он или нет; со второй ночи он каждую ночь выбирает одно из двух: проверить игрока или выстрелить в него.
 - День: все обсуждают, затем голосуют. Голосовать обязан каждый живой игрок: воздержаться нельзя, за себя голосовать нельзя. Набравший больше всех голосов выбывает из игры. При равенстве голосов решает ведущий. Роль выбывшего вскрывается.
 - Выбывшие и убитые больше не говорят и не голосуют.
 - Мирные (с доктором и комиссаром) побеждают, когда вся мафия выбыла. Мафия побеждает, когда её не меньше, чем остальных.
@@ -325,18 +325,32 @@ async function runStep(st){
     p.checked = p.checked || [];
     let opts = alive().filter(x => x !== p && !p.checked.includes(x.name)); if (!opts.length) opts = alive().filter(x => x !== p);
     nightTurn(p);
-    const {d, raw} = await ask(p, "Ночь. Ты комиссар. Кого проверяешь? Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}');
-    let t = pick(d, raw, opts); if (!t && opts.length) t = rnd(opts).name; let res = "";
+    // с первой ночи только проверка; со второй комиссар выбирает одно: проверить или выстрелить
+    const canShoot = G.day >= 2, all = alive().filter(x => x !== p);
+    const {d, raw} = canShoot
+      ? await ask(p, "Ночь. Ты комиссар. Выбери ОДНО действие: проверить игрока (узнаешь, мафия ли он) или выстрелить в игрока (он погибнет, если его не вылечит доктор; стреляй только в того, в ком уверен). Ещё не проверены: " + opts.map(o => o.name).join(", ") + ". Все живые: " + all.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "action": "проверить | стрелять", "target": "имя"}')
+      : await ask(p, "Ночь. Ты комиссар. В первую ночь стрелять нельзя, только проверка. Кого проверяешь? Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}');
+    const shoot = canShoot && /стрел|выстрел|убить|shoot/i.test(String(d.action || ""));
+    let t = pick(d, raw, shoot ? all : opts); if (!t && !shoot && opts.length) t = rnd(opts).name; let res = "";
+    if (shoot && t){ G.night.shot = t; p.notes.push(`Ночь ${G.day}: ты стрелял в игрока ${t}.`); G.last = {st, undo(){ G.night.shot = null; p.notes.pop(); }}; await show(p, `Стреляет в игрока ${t}.`, str(d.thoughts, 600), false, "Просыпается комиссар…"); return; }
+    if (shoot && !t){ t = opts.length ? rnd(opts).name : null; }   // не назвал цель выстрела: вместо него проверка
     if (t){ const isM = byName(t).role === "mafia"; res = isM ? "Это мафия." : "Не мафия."; p.checked.push(t); p.notes.push(`Ночь ${G.day}: проверка показала, что ${t} ${isM ? "МАФИЯ" : "НЕ мафия"}.`); }
     G.last = {st, undo(){ if (t){ p.notes.pop(); p.checked.pop(); } }};
     await show(p, `Проверяет: ${t || "никого"}. ${res}`, str(d.thoughts, 600), false, "Просыпается комиссар…");
     return;
   }
   if (st.k === "morning"){
-    const v = G.night.victim; G.lastHeal = G.night.heal; setNight(false);
-    if (v && v === G.night.heal){ say(`Утро ${G.day}: ночью мафия стреляла, но доктор спас жертву. Никто не погиб.`); await show(null, "Город просыпается. Мафия стреляла, но доктор спас жертву. Никто не погиб.", "", true); }
-    else if (v && byName(v).alive){ const r = RU[byName(v).role]; byName(v).alive = false; killAvatar(byName(v)); say(`Утро ${G.day}: ночью убит игрок ${v}. Его роль: ${r}.`); focus(byName(v)); await show(null, `Город просыпается. Ночью убит ${v}. Он был: ${r}.`, "", true); checkWin(); }
-    else { say(`Утро ${G.day}: ночь прошла тихо, никто не погиб.`); await show(null, "Город просыпается. Ночь прошла тихо.", "", true); }
+    const heal = G.night.heal; G.lastHeal = heal; setNight(false);
+    // ночью стреляют мафия и, со второй ночи, комиссар; доктор спасает того, кого лечил
+    const hits = [...new Set([G.night.victim, G.night.shot].filter(Boolean))], saved = hits.filter(n => n === heal), dead = hits.filter(n => n !== heal && byName(n) && byName(n).alive);
+    const parts = [];
+    for (const n of dead){ const x = byName(n), r = RU[x.role]; x.alive = false; killAvatar(x); parts.push(`ночью убит игрок ${n}. Его роль: ${r}`); }
+    if (saved.length) parts.push("доктор спас игрока, в которого стреляли");
+    if (!parts.length) parts.push("ночь прошла тихо, никто не погиб");
+    say(`Утро ${G.day}: ` + parts.join("; ") + ".");
+    if (dead.length) focus(byName(dead[0]));
+    await show(null, "Город просыпается: " + parts.join("; ") + ".", "", true);
+    if (dead.length) checkWin();
     return;
   }
   if (st.k === "speech"){
@@ -513,6 +527,8 @@ function refreshLabel(p, reveal){
   let sub = p.label; let col = "#b9bbc8";
   if (sp && G.phase !== "lobby"){ sub = RU[p.role] + " · " + p.label; col = p.role === "mafia" ? "#ff7a7e" : p.role === "civilian" ? "#7fd8c5" : "#f0c267"; }
   x.strokeText(sub.slice(0,30), 256, 112); x.fillStyle = col; x.fillText(sub.slice(0,30), 256, 112);
+  const nv = Object.values(G.ballots).filter(v => v === p.name).length;
+  if (nv && p.alive){ const t = "голосов против: " + nv; x.font = "800 34px 'Golos Text',sans-serif"; x.strokeText(t, 256, 152); x.fillStyle = "#ff5a5f"; x.fillText(t, 256, 152); }
   s.material.map.needsUpdate = true;
 }
 function makeAvatar(p){
@@ -575,14 +591,19 @@ function layout(snap){
 function killAvatar(p){ p.av.dead = true; p.av.g.traverse(o => { if (o.isMesh){ o.material = o.material.clone(); o.material.color.lerp(new THREE.Color(0x555a66), .85); if (o.material.emissive) o.material.emissiveIntensity = 0; } }); refreshLabel(p); renderSeats(); }
 function reviveAvatar(p){ if (!p.av.dead) return; scene.remove(p.av.g); p.av = makeAvatar(p); layout(true); }
 function setNight(v){ night = v; G.players.forEach(p => refreshLabel(p)); }
-function clearVotes(){ while (voteLines.children.length) voteLines.remove(voteLines.children[0]); }
+function clearVotes(keep){ if (!keep || true) setTimeout(() => G.players.forEach(p => refreshLabel(p)), 0);
+  while (voteLines.children.length){ const o = voteLines.children[0]; voteLines.remove(o); if (o.geometry) o.geometry.dispose(); } }
+// голос: толстая цветная стрелка от голосующего к тому, против кого он голосует; у каждого свой цвет
+const UP = new THREE.Vector3(0, 1, 0);
 function drawVotes(){
-  clearVotes();
+  clearVotes(true);
   for (const [a, b] of Object.entries(G.ballots)){ const A = byName(a), B = b && byName(b); if (!A || !B) continue;
-    const pa = A.av.g.position.clone().setY(1.5), pb = B.av.g.position.clone().setY(1.8), mid = pa.clone().lerp(pb, .5).setY(2.6);
-    const geo = new THREE.BufferGeometry().setFromPoints(new THREE.QuadraticBezierCurve3(pa, mid, pb).getPoints(24));
-    voteLines.add(new THREE.Line(geo, new THREE.LineBasicMaterial({color:0xe5484d})));
-    const tip = new THREE.Mesh(new THREE.SphereGeometry(.06, 8, 6), new THREE.MeshBasicMaterial({color:0xe5484d})); tip.position.copy(pb); voteLines.add(tip);
+    const i = G.players.indexOf(A), m = new THREE.MeshBasicMaterial({color:new THREE.Color().setHSL(i / G.players.length, .9, .6)});
+    const pa = A.av.g.position.clone().setY(2.0), pb = B.av.g.position.clone().setY(2.02), mid = pa.clone().lerp(pb, .5).setY(2.9 + (i % 4) * .12);
+    const curve = new THREE.QuadraticBezierCurve3(pa, mid, pb), dir = curve.getTangent(1).normalize();
+    voteLines.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 24, .022, 6), m));
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(.09, .26, 12), m); tip.position.copy(pb).addScaledVector(dir, -.05); tip.quaternion.setFromUnitVectors(UP, dir); voteLines.add(tip);
+    const base = new THREE.Mesh(new THREE.SphereGeometry(.045, 10, 8), m); base.position.copy(pa); voteLines.add(base);
   }
 }
 let focusP = null, speaking = null, camAz = 0, camAzT = 0, dragT = 0, camH = innerWidth < innerHeight ? 4.6 : 3.7;
@@ -743,11 +764,13 @@ $("bBack").onclick = () => { if (G.auto){ G.auto = false; } replay(-1); };
 $("bFwd").onclick = () => replay(1);
 $("bSkip").onclick = skipPhase;
 $("spoil").onchange = () => { G.players.forEach(p => refreshLabel(p)); renderSeats(); };
+// доктор и комиссар за столом по одному: второго сажаем мирным
+const oneOnly = r => (r === "doctor" || r === "commissar") && alive(r).length ? "civilian" : r;
 $("bAdd").onclick = () => {
   if (G.players.length >= 16) return;
   const prov = $("aProv").value, model = $("aModel").value.trim(); if (!model) return;
   if (prov === "custom" && !$("aUrl").value.trim()) return $("aUrl").focus();
-  addPlayer(prov, model, G.phase === "lobby" ? "civilian" : ($("aRole").value === "random" ? rnd(["civilian","civilian","civilian","mafia","doctor","commissar"]) : $("aRole").value), prov === "custom" ? $("aUrl").value.trim() : "", $("aName").value); $("aName").value = "";
+  addPlayer(prov, model, G.phase === "lobby" ? "civilian" : oneOnly($("aRole").value === "random" ? rnd(["civilian","civilian","civilian","mafia","doctor","commissar"]) : $("aRole").value), prov === "custom" ? $("aUrl").value.trim() : "", $("aName").value); $("aName").value = "";
 };
 fillProviders(); ui();
 // стол по умолчанию: шесть мест на модели без ключа, внешность каждая придумывает сама
