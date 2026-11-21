@@ -46,6 +46,7 @@ label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4p
 #setup{position:fixed;inset:0;background:#000b;display:flex;align-items:center;justify-content:center;z-index:30}#setup[hidden]{display:none}
 #setup .card{background:#11121b;border:1px solid var(--line);border-radius:14px;padding:18px;width:min(460px,92%);display:grid;gap:10px;max-height:92vh;overflow:auto}
 #setup h2{font:800 18px var(--display);margin:0}#setup label{display:grid;gap:4px;font-size:13px;color:var(--mute)}
+#zoomBox{position:fixed;left:12px;top:50%;transform:translateY(-50%);display:grid;gap:6px;z-index:5}#zoomBox button{width:40px;height:40px;padding:0;font-size:20px}
 </style>
 </head>
 <body>
@@ -80,6 +81,7 @@ label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4p
   <button id="sSame" hidden>Сыграть тем же столом</button>
   <button id="sManual">Рассажу сам вручную</button>
 </div></div>
+<div id="zoomBox"><button id="zIn" title="Приблизить">+</button><button id="zOut" title="Отдалить">−</button></div>
 <aside class="drawer" id="drawer" hidden>
   <h2>Игроки <button id="bClose">Закрыть</button></h2>
   <div id="seats"></div>
@@ -152,6 +154,7 @@ async function callLLM(p, system, user, tries = 4, timeout = 25000){
   const headers = Object.assign({"Content-Type":"application/json"}, pr.headers || {});
   const key = pr.key ? store.get(pr.key) : "";
   if (key) headers.Authorization = "Bearer " + key;
+  if (pr.dead) throw new Error("дневной лимит источника «" + pr.title + "» исчерпан");
   let last = "", waits = 0;
   for (let a = 0; a < tries; a++){
     const at = Math.max(Date.now(), (lastCall[p.prov]||0) + pr.gap); lastCall[p.prov] = at;
@@ -165,6 +168,7 @@ async function callLLM(p, system, user, tries = 4, timeout = 25000){
         const body = await r.text(); last = "HTTP " + r.status + " " + body.slice(0,160);
         const ra = body.match(/Retry after (\d+)s/);       // бесплатная очередь: ждём, сколько просят
         if (ra){ $("sub").innerHTML = secretNow() ? `<div class="who">Ведущий</div><div>Город спит… (очередь бесплатной модели: ${+ra[1]} с)</div>` : `<div class="who">${esc(p.name)} <span>${esc(p.label)} ждёт очереди бесплатной модели: ${+ra[1]} с</span></div>`; await sleep((+ra[1] + 1) * 1000); a--; if (++waits > 6) break; continue; }
+        if (r.status === 429 && /per-day|per day|daily|quota/i.test(body)){ pr.dead = true; last = "дневной лимит источника «" + pr.title + "» исчерпан"; break; }
         if ([400,401,403,404].includes(r.status)) break; await sleep((r.status === 429 ? Math.min(20, +r.headers.get("retry-after") || 4*(a+1)) : 1.5*(a+1)) * 1000); continue; }
       const d = await r.json(), mm = (d.choices && d.choices[0] && d.choices[0].message) || {}, txt = mm.content || mm.reasoning_content || mm.reasoning || "";
       if (txt.trim()) return txt;
@@ -237,6 +241,24 @@ function ctx(p){
   if (p.notes.length) c += "\n\nТВОИ ЛИЧНЫЕ ЗАМЕТКИ (видишь только ты):\n" + p.notes.join("\n");
   return c;
 }
+function swapModel(p, why){
+  const used = new Set(G.players.map(x => x.prov + "|" + x.model));
+  const c = lineup(16).find(([k, m]) => !used.has(k + "|" + m)) || (p.prov !== "pollinations" ? ["pollinations", "openai-fast"] : null);
+  if (!c) return false;
+  const old = p.name, br = brandOf(c[1]);
+  p.prov = c[0]; p.model = c[1]; p.url = ""; p.maker = br.maker; p.failed = false;
+  p.label = c[0] === "pollinations" ? "GPT-OSS 20B" : c[1].split("/").pop().replace(":free", "");
+  p.name = "\u0000"; const nn = freeName(br.name); p.name = nn;
+  // имя меняется везде, где оно записано
+  const re = new RegExp(old.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?! \\d)(?![\\wА-Яа-яЁё-])", "g"), fix = t => typeof t === "string" ? t.replace(re, nn) : t;
+  G.pub = G.pub.map(fix); G.players.forEach(x => { x.notes = x.notes.map(fix); x.checked = (x.checked || []).map(fix); });
+  const b = {}; for (const [k, v] of Object.entries(G.ballots)) b[fix(k)] = fix(v); G.ballots = b;
+  if (G.night){ const mv = {}; for (const [k, v] of Object.entries(G.night.mv || {})) mv[fix(k)] = fix(v); G.night.mv = mv; G.night.chat = G.night.chat.map(fix); for (const k of ["victim", "heal", "shot"]) G.night[k] = fix(G.night[k]); }
+  G.lastHeal = fix(G.lastHeal); if (G.pending) G.pending.names = G.pending.names.map(fix);
+  if (G.phase !== "lobby") say(`Замена: вместо ${old} (${why}) за стол сел ${nn}. Место и роль те же.`); else $("log").textContent = G.pub.join("\n");
+  refreshLabel(p); drawVotes(); renderSeats();
+  return true;
+}
 function hint(p){
   if (p.role === "commissar"){
     const ch = (p.checked || []).map(byName).filter(x => x && x.alive), bad = ch.filter(x => x.role === "mafia").map(x => x.name), good = ch.filter(x => x.role !== "mafia").map(x => x.name);
@@ -248,14 +270,17 @@ function hint(p){
   if (p.role === "mafia") return "\nТы мафия: уводи подозрения от себя и напарников на мирных, но правдоподобно.";
   return "";
 }
-async function ask(p, task, fmt){
+async function ask(p, task, fmt, again){
   const user = ctx(p) + "\n\nЗАДАНИЕ: " + task + "\nСначала подумай. В thoughts разбери по шагам (3-5 коротких предложений): что говорил и как голосовал каждый игрок, кто кем может быть, что выгодно твоей команде. Только потом дай ответ, который следует из этого разбора. Ответь строго одним JSON без текста вокруг: " + fmt;
   const need = fmt.includes('"target"') ? "target" : fmt.includes('"speech"') ? "speech" : null;
   try {
     let raw = await callLLM(p, sysPrompt(p), user), d = parseJSON(raw);
     if (need && !String(d[need] ?? "").trim()){ raw = await callLLM(p, sysPrompt(p), user + `\nВ прошлый раз ты не заполнил поле "${need}". Заполни его обязательно.`); d = parseJSON(raw); }
     return {d, raw};
-  } catch(e){ return {d:{}, raw:"", err:e.message}; }
+  } catch(e){
+    if (!again && G.phase !== "lobby" && swapModel(p, "модель перестала отвечать")) return ask(p, task, fmt, true);
+    return {d:{}, raw:"", err:e.message};
+  }
 }
 function pick(d, raw, opts, field="target"){
   const v = String(d[field] ?? "").trim().toLowerCase();
@@ -655,9 +680,16 @@ function nightTurn(p){
   focus(null); G.players.forEach(x => x.thinking = false);
   $("sub").innerHTML = `<div class="who">Ведущий</div><div>Город спит…</div>`;
 }
+let zoom = 1, zoomT = +store.get("zoom") || 1;
+const setZoom = z => { zoomT = Math.min(1.9, Math.max(.4, z)); store.set("zoom", zoomT.toFixed(2)); dragT = performance.now(); };
+canvas.addEventListener("wheel", e => { e.preventDefault(); setZoom(zoomT * Math.exp(e.deltaY * .0015)); }, {passive:false});
+const touches = new Map(); let pinch = 0;
+canvas.addEventListener("pointerdown", e => { touches.set(e.pointerId, e); if (touches.size === 2){ const [a, b] = [...touches.values()]; pinch = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) * zoomT; } });
+canvas.addEventListener("pointermove", e => { if (!touches.has(e.pointerId)) return; touches.set(e.pointerId, e); if (touches.size === 2 && pinch){ const [a, b] = [...touches.values()]; setZoom(pinch / Math.max(20, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY))); } });
+for (const ev of ["pointerup", "pointercancel"]) canvas.addEventListener(ev, e => { touches.delete(e.pointerId); pinch = 0; });
 let pd = null;
 canvas.addEventListener("pointerdown", e => { pd = {x:e.clientX, y:e.clientY, az:camAzT, h:camH}; canvas.setPointerCapture(e.pointerId); });
-canvas.addEventListener("pointermove", e => { if (!pd) return; camAzT = pd.az - (e.clientX - pd.x) * .008; camH = Math.min(6, Math.max(1.6, pd.h + (e.clientY - pd.y) * .012)); dragT = performance.now(); });
+canvas.addEventListener("pointermove", e => { if (!pd || touches.size > 1) return; camAzT = pd.az - (e.clientX - pd.x) * .008; camH = Math.min(6, Math.max(1.6, pd.h + (e.clientY - pd.y) * .012)); dragT = performance.now(); });
 canvas.addEventListener("pointerup", () => pd = null);
 function resize(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); cam.aspect = w / h; cam.fov = w < h ? 62 : 46; cam.updateProjectionMatrix(); }
 addEventListener("resize", resize); resize();
@@ -700,7 +732,8 @@ function frame(t){
   spot.intensity += ((f ? 1.6 : 0) - spot.intensity) * .16;
   if (f){ spot.target.position.lerp(tmp.copy(f.av.g.position).setY(1.4), .1); spot.position.set(f.av.g.position.x * .5, 5, f.av.g.position.z * .5); }
   camAz += (camAzT - camAz) * .08;
-  const cr = R + (cam.aspect < 1 ? 6.2 : 4.8);
+  zoom += (zoomT - zoom) * .2;
+  const cr = (R + (cam.aspect < 1 ? 6.2 : 4.8)) * zoom;
   scene.fog.near = cr + R + 2; scene.fog.far = cr + R + 16;
   cam.position.set(Math.sin(camAz) * cr, camH, Math.cos(camAz) * cr);
   look.lerp(f ? tmp.copy(f.av.g.position).multiplyScalar(.45).setY(1.35) : tmp.set(0, 1.25, 0), .1); cam.lookAt(look);
@@ -714,6 +747,11 @@ let lastSay = null, voices = [];
 const synth = window.speechSynthesis;
 function loadVoices(){ if (!synth) return; const v = synth.getVoices(); voices = v.filter(x => /^ru/i.test(x.lang)); if (!voices.length) voices = []; }
 if (synth){ loadVoices(); synth.onvoiceschanged = loadVoices; }
+function voiceOf(p){
+  const fem = p.design.gender === "женский", same = G.players.filter(x => x.design.gender === p.design.gender), i = Math.max(0, same.indexOf(p)), k = same.length;
+  const lo = fem ? 1.1 : .3, hi = fem ? 1.75 : .85;
+  return { pitch: +(lo + (hi - lo) * (k > 1 ? i / (k - 1) : .5)).toFixed(2), rate: [1, .9, 1.12, .95, 1.06, .86, 1.18][i % 7], voice: voices.length ? voices[(i + (fem ? 0 : 1)) % voices.length] : null };
+}
 function speak(p, text){
   return new Promise(res => {
     const est = Math.min(4500, 500 + text.length * 22);
@@ -721,8 +759,7 @@ function speak(p, text){
     try {
       synth.cancel();
       const u = new SpeechSynthesisUtterance(text.replace(/[()«»"]/g, "")); u.lang = "ru-RU";
-      if (p){ u.pitch = p.design.voice_pitch; u.rate = p.design.voice_rate; const fem = p.design.gender === "женский", fv = voices.filter(v => /milena|katya|alena|алёна|алена|ирина|irina|svetlana|светлана|dariya|дарья|female|женск/i.test(v.name)), mv = voices.filter(v => /yuri|юрий|pavel|павел|dmitr|дмитр|maxim|максим|male|мужск/i.test(v.name) && !/female/i.test(v.name));
-        const pool = (fem ? fv : mv).length ? (fem ? fv : mv) : voices; if (pool.length) u.voice = pool[G.players.filter(x => x.design.gender === p.design.gender).indexOf(p) % pool.length]; }
+      if (p){ const v = voiceOf(p); u.pitch = v.pitch; u.rate = v.rate; if (v.voice) u.voice = v.voice; }
       else { u.pitch = .6; u.rate = .95; if (voices.length) u.voice = voices[voices.length-1]; }
       let done = false; const fin = () => { if (!done){ done = true; res(); } };
       u.onend = fin; u.onerror = fin; setTimeout(fin, est * 2.5 + 4000);
@@ -776,7 +813,8 @@ function renderSeats(){
     const role = sp && G.phase !== "lobby" ? ` <span class="role ${p.role}">${rn(p)}</span>` : "";
     d.innerHTML = `<div><b class="${p.alive ? "" : "dead"}"></b>${role}</div><small></small>`;
     d.querySelector("b").textContent = p.name; d.querySelector("small").textContent = p.label + (p.design.persona ? " · " + p.design.persona : "");
-    if (p.alive){ const b = document.createElement("button"); b.className = "danger"; b.textContent = G.phase === "lobby" ? "Убрать" : "Выгнать"; b.onclick = () => kick(p.name); d.appendChild(b); }
+    if (p.alive){ const b = document.createElement("button"); b.className = "danger"; b.textContent = G.phase === "lobby" ? "Убрать" : "Выгнать"; b.onclick = () => kick(p.name); d.appendChild(b);
+      const r = document.createElement("button"); r.textContent = "Заменить модель"; r.disabled = G.busy; r.onclick = () => { if (!G.busy && !swapModel(p, "замена ведущим")) show(null, "Свободных рабочих моделей больше нет.", "", true); }; d.appendChild(r); }
     el.appendChild(d);
   }
   ui();
@@ -800,6 +838,7 @@ $("bNext").onclick = next;
 $("bAuto").onclick = () => { G.auto = !G.auto; ui(); if (G.auto && !G.busy && G.phase !== "lobby" && G.phase !== "over") next(); };
 $("bSay").onclick = async () => { if (lastSay && !G.busy){ speaking = lastSay.p; if (lastSay.p) focus(lastSay.p); await speak(lastSay.p, lastSay.text); speaking = null; } };
 $("bRedo").onclick = redo;
+$("zIn").onclick = () => setZoom(zoomT * .82); $("zOut").onclick = () => setZoom(zoomT * 1.22);
 $("bBack").onclick = () => { if (G.auto){ G.auto = false; } replay(-1); };
 $("bFwd").onclick = () => replay(1);
 $("bSkip").onclick = skipPhase;
@@ -816,11 +855,11 @@ fillProviders(); ui();
 // стол по умолчанию: шесть мест на модели без ключа, внешность каждая придумывает сама
 // состав: по кругу берём по одной модели из каждого источника с ключом, чтобы компании были разные
 function lineup(n){
-  const provs = Object.entries(PROV).filter(([k, v]) => k !== "custom" && k !== "mistral" && (!v.key || store.get(v.key)));
+  const provs = Object.entries(PROV).filter(([k, v]) => k !== "custom" && k !== "mistral" && !v.dead && (!v.key || store.get(v.key)));
   const out = [], seen = new Set();
   for (let round = 0; out.length < n && round < 12; round++) for (const [k, v] of provs){
     const m = v.models[round]; if (!m || out.length >= n) continue;
-    const b = brandOf(m).name + "|" + m.split("/").pop(); if (seen.has(b)) continue; seen.add(b); out.push([k, m]);
+    const b = m.split("/").pop().replace(":free", "").toLowerCase(); if (seen.has(b)) continue; seen.add(b); out.push([k, m]);
   }
   return out;
 }
@@ -830,16 +869,21 @@ async function fillTable(){
   const n = Math.min(16, Math.max(4, +$("nPlayers").value || 8)); $("nPlayers").value = n; store.set("nPlayers", n);
   G.players.forEach(p => scene.remove(p.av.g)); G.players = []; G.phase = "lobby"; G.queue = []; G.pub = []; G.pending = null; G.last = null; clearVotes(); setNight(false); $("log").textContent = ""; renderSeats();
   // молчащую модель убираем и берём следующую из списка
-  const cand = lineup(16), first = cand.splice(0, n);
-  while (first.length < n) first.push(["pollinations", "openai-fast"]);
-  await Promise.all(first.map(([prov, model]) => addPlayer(prov, model)));
-  // молчащую модель заменяем следующей из списка
-  let bad;
-  while (G.phase === "lobby" && cand.length && (bad = G.players.find(p => p.failed && p.prov !== "pollinations"))){
-    G.players = G.players.filter(p => p !== bad); scene.remove(bad.av.g); layout(); renderSeats();
-    const [prov, model] = cand.shift(); await addPlayer(prov, model);
+  // каждая модель садится один раз; молчащих убираем и пробуем следующих из списка
+  let cand = lineup(16);
+  while (G.phase === "lobby" && G.players.length < n && cand.length){
+    const batch = cand.splice(0, n - G.players.length).filter(([prov]) => !PROV[prov].dead);
+    await Promise.all(batch.map(([prov, model]) => addPlayer(prov, model)));
+    for (const bad of G.players.filter(p => p.failed)){ G.players = G.players.filter(p => p !== bad); scene.remove(bad.av.g); }
+    layout(); renderSeats();
   }
+  const uniq = G.players.length;
+  while (G.players.length < 4) await addPlayer("pollinations", "openai-fast");   // меньше четырёх играть нельзя
   filling = false; $("bFill").disabled = false; ui();
+  if (uniq < n){
+    const dead = Object.values(PROV).filter(v => v.dead).map(v => v.title);
+    show(null, `Сейчас отвечают только ${uniq} разных нейросетей, за стол сели они.` + (dead.length ? ` Дневной лимит исчерпан: ${dead.join(", ")}. Он обновится завтра.` : "") + " Добавь ключ Hugging Face в настройках, чтобы моделей стало больше.", "", true);
+  }
 }
 $("nPlayers").value = store.get("nPlayers") || 8; $("bFill").onclick = fillTable;
 // стартовое окно: состав партии
