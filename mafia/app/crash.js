@@ -80,7 +80,7 @@ window.crashTest = async function (games = 100, seed = 1) {
     if ($("sFill").value === "1" && G.players.length !== n) bad("игроков не столько, сколько выбрано", G.players.length + " вместо " + n);
     if (G.players.some(p => p.failed)) bad("за столом молчащая модель");
     check("после рассадки");
-    let steps = 0, lastPub = 0, dealt = false;
+    let steps = 0, lastPub = 0, dealt = false; const heals = {};
     while (steps++ < 1500) {
       if (G.phase === "over" && !G.queue.length) break;
       const phaseBefore = G.phase, healBefore = G.lastHeal;
@@ -108,7 +108,7 @@ window.crashTest = async function (games = 100, seed = 1) {
         if (m < 1 || m * 2 >= G.players.length) bad("раздача: мафий " + m + " на " + G.players.length);
         if (G.useDon && G.players.filter(p => p.don).length !== 1) bad("раздача: донов не один");
       }
-      if (!host && phaseBefore === "night" && G.night && G.night.heal && healBefore && G.night.heal === healBefore) bad("доктор лечит одного и того же вторую ночь подряд", G.night.heal);
+      if (!host && G.night && G.night.heal){ if (heals[G.day - 1] && heals[G.day - 1] === G.night.heal && heals[G.day] === undefined) bad("доктор лечит одного и того же вторую ночь подряд", G.night.heal); heals[G.day] = G.night.heal; }
       for (let i = lastPub; i < G.pub.length; i++) { if (/Голоса равны/.test(G.pub[i])) stats.ties++; if (/спас/.test(G.pub[i])) stats.saves++; }
       lastPub = G.pub.length;
       check("шаг " + steps + " фаза " + G.phase);

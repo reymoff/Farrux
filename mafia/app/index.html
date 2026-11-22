@@ -40,6 +40,7 @@ input,select{font:14px var(--body);color:var(--fg);background:#0f1018;border:1px
 .role.mafia{color:var(--blood)}.role.doctor,.role.commissar{color:var(--gold)}.role.civilian{color:var(--town)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4px}
+#rating table{width:100%;border-collapse:collapse;font-size:12px}#rating th,#rating td{text-align:right;padding:4px 3px;border-bottom:1px solid var(--line)}#rating th:first-child,#rating td:first-child{text-align:left}#rating th{color:var(--mute);font-weight:500}
 #log{font-size:13px;white-space:pre-wrap;color:#cfcdc4;overflow-wrap:anywhere}
 .note{font-size:12px;color:var(--mute)}
 [hidden]{display:none!important}
@@ -117,6 +118,9 @@ label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4p
   <label>Claude (console.anthropic.com, платный)<input id="kAnthropic" type="password" autocomplete="off"></label>
   <label>Mistral (console.mistral.ai, платный)<input id="kMistral" type="password" autocomplete="off"></label>
   <label>Ключ для своего адреса (необязательно)<input id="kCustom" type="password" autocomplete="off"></label>
+  <h2>Рейтинг нейросетей <button id="bRateReset">Сбросить</button></h2>
+  <div class="note">Копится по всем доигранным партиям в этом браузере. Точность голосов: как часто мирный игрок голосовал против настоящей мафии.</div>
+  <div id="rating"></div>
   <h2>Протокол</h2>
   <div id="log"></div>
 </aside>
@@ -308,6 +312,25 @@ function dealRoles(){
   G.players.forEach((p,i) => { p.role = roles[i]; p.alive = true; p.notes = []; p.checked = []; p.don = false; });
   G.useDon = $("sDon").value === "1" && nm >= 2; if (G.useDon) rnd(G.players.filter(p => p.role === "mafia")).don = true;
 }
+// ---- рейтинг
+const rateKey = p => brandOf(p.model).name + " · " + p.label;
+function rateLoad(){ try { return JSON.parse(store.get("rating") || "{}") || {}; } catch(e){ return {}; } }
+function recordGame(){
+  if (G.winner !== "town" && G.winner !== "mafia") return;
+  const R0 = rateLoad();
+  for (const p of G.players){
+    const r = R0[rateKey(p)] = Object.assign({g:0, w:0, mg:0, mw:0, tg:0, tw:0, vn:0, vh:0, live:0, fail:0}, R0[rateKey(p)] || {});
+    const maf = p.role === "mafia", won = (G.winner === "mafia") === maf;
+    r.g++; if (won) r.w++; if (maf){ r.mg++; if (won) r.mw++; } else { r.tg++; if (won) r.tw++; }
+    r.vn += p.vn || 0; r.vh += p.vh || 0; if (p.alive) r.live++; r.fail += p.fails || 0;
+  }
+  store.set("rating", JSON.stringify(R0)); renderRating();
+}
+function renderRating(){
+  const R0 = rateLoad(), rows = Object.entries(R0).sort((a, b) => b[1].w / b[1].g - a[1].w / a[1].g || b[1].g - a[1].g), pc = (a, b) => b ? Math.round(a / b * 100) + "%" : "—";
+  $("rating").innerHTML = rows.length ? "<table><tr><th>Нейросеть</th><th>Игр</th><th>Побед</th><th>За мафию</th><th>За мирных</th><th>Точность голосов</th><th>Выжил</th></tr>" +
+    rows.map(([k, r]) => `<tr><td>${esc(k)}</td><td>${r.g}</td><td>${pc(r.w, r.g)}</td><td>${pc(r.mw, r.mg)}</td><td>${pc(r.tw, r.tg)}</td><td>${pc(r.vh, r.vn)}</td><td>${pc(r.live, r.g)}</td></tr>`).join("") + "</table>" : "Пока нет доигранных партий.";
+}
 function checkWin(){
   if (G.phase === "lobby" || G.phase === "over") return;
   const m = alive("mafia").length, t = alive().length - m;
@@ -440,7 +463,8 @@ async function runStep(st){
     const {d, raw} = await ask(p, "Голосование. Кого выгоняешь из игры? Варианты: " + opts.map(o => o.name).join(", ") + '. Воздержаться нельзя: назови ровно одно имя из списка.' + hint(p), '{"thoughts": "скрытые рассуждения", "target": "имя из списка"}');
     let t = pick(d, raw, opts); const forced = !t && opts.length; if (forced) t = rnd(opts).name;   // голос обязателен
     G.ballots[p.name] = t; drawVotes();
-    G.last = {st, undo(){ delete G.ballots[p.name]; drawVotes(); }};
+    const cnt = p.role !== "mafia" && !forced && t ? [1, byName(t).role === "mafia" ? 1 : 0] : [0, 0]; p.vn = (p.vn || 0) + cnt[0]; p.vh = (p.vh || 0) + cnt[1];
+    G.last = {st, undo(){ delete G.ballots[p.name]; p.vn -= cnt[0]; p.vh -= cnt[1]; drawVotes(); }};
     await show(p, t ? `Голосую против: ${t}.` + (forced ? " (модель не назвала имя, голос выбран жребием)" : "") : "Воздерживаюсь.", str(d.thoughts, 600), true);
     return;
   }
@@ -484,7 +508,7 @@ async function runStep(st){
   if (st.k === "end"){
     setNight(false); G.players.forEach(x => refreshLabel(x, true));
     const txt = G.winner === "town" ? "Игра окончена. Победили мирные жители." : "Игра окончена. Победила мафия.";
-    say(txt); await show(null, txt + " Мафией были: " + G.players.filter(x => x.role === "mafia").map(x => x.name).join(", ") + ".", "", true);
+    say(txt); recordGame(); await show(null, txt + " Мафией были: " + G.players.filter(x => x.role === "mafia").map(x => x.name).join(", ") + ".", "", true);
   }
 }
 async function next(){
@@ -503,6 +527,7 @@ async function next(){
 }
 function startGame(){
   if (G.players.length < 4){ G.phase = "lobby"; ui(); show(null, "Нужно минимум 4 игрока. Открой «Стол и настройки» и посади ещё.", "", false); return false; }
+  G.players.forEach(p => { p.vn = 0; p.vh = 0; p.fails = 0; });
   dealRoles(); G.day = 0; G.pub = []; G.winner = null; G.lastHeal = null; G.ballots = {}; G.night = null; G.last = null; G.pending = null; G.phase = "start";
   G.players.forEach(p => { reviveAvatar(p); refreshLabel(p); });
   G.queue = [{k:"narr", text:"Игра начинается. Роли розданы. Знакомимся.", pub:"Игра началась. За столом: " + G.players.map(p => p.name).join(", ") + "."}]
@@ -763,7 +788,8 @@ function frame(t){
   if (f){ spot.target.position.lerp(tmp.copy(f.av.g.position).setY(1.4), .1); spot.position.set(f.av.g.position.x * .5, 5, f.av.g.position.z * .5); }
   camAz += (camAzT - camAz) * .08;
   zoom += (zoomT - zoom) * .2;
-  const cr = (R + (cam.aspect < 1 ? 6.2 : 4.8)) * zoom;
+  // камера отходит так, чтобы весь стол помещался по ширине, в том числе на телефоне
+  const cr = Math.max(R + (cam.aspect < 1 ? 6.2 : 4.8), (R + 1) / (Math.tan(cam.fov * Math.PI / 360) * cam.aspect) + R * .35) * zoom;
   scene.fog.near = cr + R + 2; scene.fog.far = cr + R + 16;
   cam.position.set(Math.sin(camAz) * cr, camH, Math.cos(camAz) * cr);
   look.lerp(f ? tmp.copy(f.av.g.position).multiplyScalar(.45).setY(1.35) : tmp.set(0, 1.25, 0), .1); cam.lookAt(look);
@@ -871,6 +897,7 @@ $("bNext").onclick = next;
 $("bAuto").onclick = () => { G.auto = !G.auto; ui(); if (G.auto && !G.busy && G.phase !== "lobby" && G.phase !== "over") next(); };
 $("bSay").onclick = async () => { if (lastSay && !G.busy){ speaking = lastSay.p; if (lastSay.p) focus(lastSay.p); await speak(lastSay.p, lastSay.text); speaking = null; } };
 $("bRedo").onclick = redo;
+$("bRateReset").onclick = () => { store.set("rating", "{}"); renderRating(); };
 $("bEnd").onclick = () => {
   if (G.busy || G.phase === "lobby" || G.phase === "over") return;
   G.auto = false; G.pending = null; G.queue = []; G.tie = null; G.last = null; G.winner = "stopped"; G.phase = "over"; if (synth) synth.cancel(); setNight(false); clearVotes();
@@ -950,6 +977,7 @@ $("sPlayers").oninput = setupRefresh; $("sMafia").onchange = setupRefresh; $("sD
 $("sGo").onclick = async () => { applySetup(); await fillTable(); next(); };
 $("sSame").onclick = () => { applySetup(); G.phase = "lobby"; clearVotes(); setNight(false); focus(null); next(); };
 $("sManual").onclick = () => { applySetup(); if (G.phase === "over"){ G.phase = "lobby"; clearVotes(); setNight(false); } $("drawer").hidden = false; renderSeats(); };
+renderRating();
 openSetup();
 window.G = G;
 </script>
