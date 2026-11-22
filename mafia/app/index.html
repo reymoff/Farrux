@@ -137,9 +137,9 @@ const PROV = {
   openrouter:{ title:"OpenRouter", url:"https://openrouter.ai/api/v1/chat/completions", key:"kOpenrouter", gap:2200,
     models:["baidu/ernie-5.5-flash-preview:free","inclusionai/ling-3.2-flash:free","particle-ai/particle-1:free","recursive/flint-v1.0:free","nvidia/nemotron-3.5-lightning:free","google/gemma-4-31b-it:free","liquid/lfm-3-1.7b:free"] },
   gemini:{ title:"Google Gemini", url:"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", key:"kGemini", gap:2200,
-    models:["gemini-flash-lite-latest","gemini-flash-latest","gemma-4-31b-it"] },
+    models:["gemini-flash-lite-latest","gemini-flash-latest"] },
   groq:{ title:"Groq", url:"https://api.groq.com/openai/v1/chat/completions", key:"kGroq", gap:800,
-    models:["openai/gpt-oss-120b","qwen/qwen3.8-27b","allam-2-7b"] },
+    models:["openai/gpt-oss-120b","qwen/qwen3.8-27b"] },
   hf:{ title:"Hugging Face", url:"https://router.huggingface.co/v1/chat/completions", key:"kHf", gap:800,
     models:["deepseek-ai/DeepSeek-V4.1-Flash","meta-llama/Llama-3.3-70B-Instruct","moonshotai/Kimi-K3","zai-org/GLM-5.3-Flash","ibm-granite/granite-4.2-30b","microsoft/phi-4","CohereLabs/c4ai-command-r-08-2024"] },
   anthropic:{ title:"Claude (Anthropic, платный ключ)", url:"https://api.anthropic.com/v1/chat/completions", key:"kAnthropic", gap:800,
@@ -148,14 +148,14 @@ const PROV = {
     models:["mistral-small-latest","mistral-large-latest"] },
   custom:{ title:"Свой адрес (Ollama и другие)", url:"", key:"kCustom", gap:0, models:["llama3.2","gemma3","qwen3"] },
 };
-const lastCall = {};
+const lastCall = {}, flaky = {};
 let filling = false;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // ночью при скрытых ролях нельзя показывать, кто сейчас ходит
 const secretNow = () => G.phase === "night" && $("spoil").value !== "1";
 
-async function callLLM(p, system, user, tries = 4, timeout = 25000){
+async function callLLM(p, system, user, tries = 2, timeout = 20000){
   const pr = PROV[p.prov], url = p.url || pr.url;
   const headers = Object.assign({"Content-Type":"application/json"}, pr.headers || {});
   const key = pr.key ? store.get(pr.key) : "";
@@ -167,7 +167,7 @@ async function callLLM(p, system, user, tries = 4, timeout = 25000){
     if (at > Date.now()) await sleep(at - Date.now());
     const ac = new AbortController(), t = setTimeout(() => ac.abort(), timeout);
     try {
-      const r = await fetch(url, {method:"POST", headers, signal:ac.signal, body:JSON.stringify({model:p.model, temperature:0.6, max_tokens:p.prov === "pollinations" ? 1200 : 2000, ...(p.prov === "pollinations" ? {seed:Math.floor(Math.random()*1e9)} : {}),
+      const r = await fetch(url, {method:"POST", headers, signal:ac.signal, body:JSON.stringify({model:p.model, temperature:0.6, max_tokens:1200, ...(p.prov === "pollinations" ? {seed:Math.floor(Math.random()*1e9)} : {}),
         messages:[{role:"system",content:system},{role:"user",content:user}]})});
       clearTimeout(t);
       if (!r.ok){
@@ -175,12 +175,14 @@ async function callLLM(p, system, user, tries = 4, timeout = 25000){
         const ra = body.match(/Retry after (\d+)s/);       // бесплатная очередь: ждём, сколько просят
         if (ra){ $("sub").innerHTML = secretNow() ? `<div class="who">Ведущий</div><div>Город спит… (очередь бесплатной модели: ${+ra[1]} с)</div>` : `<div class="who">${esc(p.name)} <span>${esc(p.label)} ждёт очереди бесплатной модели: ${+ra[1]} с</span></div>`; await sleep((+ra[1] + 1) * 1000); a--; if (++waits > 6) break; continue; }
         if (r.status === 429 && /per-?day|per day|perday|daily/i.test(body)){ pr.dead = true; last = "дневной лимит источника «" + pr.title + "» исчерпан"; break; }
-        if ([400,401,403,404].includes(r.status)) break; await sleep((r.status === 429 ? Math.min(20, +r.headers.get("retry-after") || 4*(a+1)) : 1.5*(a+1)) * 1000); continue; }
+        if ([400,401,403,404].includes(r.status)) break; const ra2 = +r.headers.get("retry-after") || 0; if (r.status === 429 && ra2 > 12) break;   // ждать долго: быстрее заменить модель
+        await sleep((r.status === 429 ? Math.max(2, ra2) : 1.5) * 1000); continue; }
       const d = await r.json(), mm = (d.choices && d.choices[0] && d.choices[0].message) || {}, txt = mm.content || mm.reasoning_content || mm.reasoning || "";
       if (txt.trim()) return txt;
       last = "пустой ответ";
     } catch(e){ clearTimeout(t); last = String(e.message || e).slice(0,160); await sleep(1500*(a+1)); }
   }
+  flaky[p.prov + "|" + p.model] = (flaky[p.prov + "|" + p.model] || 0) + 1;
   throw new Error(last);
 }
 function parseJSON(txt){
@@ -277,6 +279,24 @@ function hint(p){
   if (p.role === "mafia") return "\nТы мафия: уводи подозрения от себя и напарников на мирных, но правдоподобно.";
   return "";
 }
+// Ходы, которые не зависят друг от друга (голоса, переголосование, доктор, комиссар), спрашиваем заранее и сразу у всех:
+// пока стол слушает одного, остальные уже думают.
+function stepAsk(st){
+  const p = st.p;
+  if (st.k === "vote"){ const opts = alive().filter(o => o !== p); return ask(p, "Голосование. Кого выгоняешь из игры? Варианты: " + opts.map(o => o.name).join(", ") + '. Воздержаться нельзя: назови ровно одно имя из списка.' + hint(p), '{"thoughts": "скрытые рассуждения", "target": "имя из списка"}'); }
+  if (st.k === "tievote") return ask(p, `Голоса равны между: ${G.tie.names.join(", ")}. Реши: выгнать их всех сразу или не выгонять никого. Подумай, выгодно ли это твоей команде.` + hint(p), '{"thoughts": "скрытые рассуждения", "choice": "выгнать | оставить"}');
+  if (st.k === "doctor"){ const opts = alive().filter(x => x.name !== G.lastHeal); return ask(p, "Ночь. Ты доктор. Кого лечишь? Можно себя. Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}'); }
+  if (st.k === "commissar"){
+    p.checked = p.checked || [];
+    let opts = alive().filter(x => x !== p && !p.checked.includes(x.name)); if (!opts.length) opts = alive().filter(x => x !== p);
+    const canShoot = G.day >= 2, all = alive().filter(x => x !== p);
+    return canShoot
+      ? ask(p, "Ночь. Ты комиссар. Выбери ОДНО действие: проверить игрока (узнаешь, мафия ли он) или выстрелить в игрока (он погибнет, если его не вылечит доктор; стреляй только в того, в ком уверен). Ещё не проверены: " + opts.map(o => o.name).join(", ") + ". Все живые: " + all.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "action": "проверить | стрелять", "target": "имя"}')
+      : ask(p, "Ночь. Ты комиссар. В первую ночь стрелять нельзя, только проверка. Кого проверяешь? Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}');
+  }
+}
+function job(st){ const j = st.job || stepAsk(st); st.job = null; return j; }
+function prefetch(kinds){ for (const q of G.queue) if (kinds.includes(q.k) && q.p && q.p.alive && !q.job) q.job = stepAsk(q); }
 async function ask(p, task, fmt, again){
   const user = ctx(p) + "\n\nЗАДАНИЕ: " + task + "\nСначала подумай. В thoughts разбери по шагам (3-5 коротких предложений): что говорил и как голосовал каждый игрок, кто кем может быть, что выгодно твоей команде. Только потом дай ответ, который следует из этого разбора. Ответь строго одним JSON без текста вокруг: " + fmt;
   const need = fmt.includes('"target"') ? "target" : fmt.includes('"speech"') ? "speech" : null;
@@ -340,7 +360,7 @@ function checkWin(){
 function buildNight(){
   G.day++; G.phase = "night"; G.night = {chat:[], votes:[], mv:{}, shot:null, victim:null, heal:null}; G.ballots = {}; clearVotes();
   if (G.useDon && alive("mafia").length && !alive("mafia").some(m => m.don)){ const nd = alive("mafia")[0]; nd.don = true; alive("mafia").forEach(m => m.notes.push(`Прежний дон выбыл. Новый дон мафии: ${nd.name}.`)); refreshLabel(nd); }
-  const q = [{k:"narr", text:`Ночь ${G.day}. Город засыпает. Просыпается мафия.`, pub:`--- Ночь ${G.day} ---`}];
+  const q = [{k:"narr", text:`Ночь ${G.day}. Город засыпает. Просыпается мафия.`, pub:`--- Ночь ${G.day} ---`, night:true}];
   alive("mafia").forEach(p => q.push({k:"mafia", p}));
   q.push({k:"mafiaResolve"});
   alive("doctor").forEach(p => q.push({k:"doctor", p}));
@@ -372,7 +392,7 @@ async function runStep(st){
   const p = st.p;
   if (p && !p.alive) return;      // выгнан ведущим посреди этапа
   G.last = null;
-  if (st.k === "narr"){ if (st.vote) G.phase = "vote"; say(st.pub); await show(null, st.text, "", true); return; }
+  if (st.k === "narr"){ if (st.vote) G.phase = "vote"; say(st.pub); if (st.vote) prefetch(["vote"]); if (st.night) prefetch(["doctor", "commissar"]); await show(null, st.text, "", true); return; }
   if (st.k === "intro"){ focus(p); await show(p, p.design.catchphrase || "Всем привет.", p.design.persona || "", true); return; }
   if (st.k === "mafia"){
     const targets = alive().filter(x => x.role !== "mafia");
@@ -405,7 +425,7 @@ async function runStep(st){
   if (st.k === "doctor"){
     const opts = alive().filter(x => x.name !== G.lastHeal);
     nightTurn(p);
-    const {d, raw} = await ask(p, "Ночь. Ты доктор. Кого лечишь? Можно себя. Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}');
+    const {d, raw} = await job(st);
     let t = pick(d, raw, opts); if (!t && opts.length) t = rnd(opts).name; G.night.heal = t;
     if (t) p.notes.push(`Ночь ${G.day}: ты лечил игрока ${t}.`);
     G.last = {st, undo(){ G.night.heal = null; if (t) p.notes.pop(); }};
@@ -418,9 +438,7 @@ async function runStep(st){
     nightTurn(p);
     // с первой ночи только проверка; со второй комиссар выбирает одно: проверить или выстрелить
     const canShoot = G.day >= 2, all = alive().filter(x => x !== p);
-    const {d, raw} = canShoot
-      ? await ask(p, "Ночь. Ты комиссар. Выбери ОДНО действие: проверить игрока (узнаешь, мафия ли он) или выстрелить в игрока (он погибнет, если его не вылечит доктор; стреляй только в того, в ком уверен). Ещё не проверены: " + opts.map(o => o.name).join(", ") + ". Все живые: " + all.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "action": "проверить | стрелять", "target": "имя"}')
-      : await ask(p, "Ночь. Ты комиссар. В первую ночь стрелять нельзя, только проверка. Кого проверяешь? Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}');
+    const {d, raw} = await job(st);
     const shoot = canShoot && /стрел|выстрел|убить|shoot/i.test(String(d.action || ""));
     let t = pick(d, raw, shoot ? all : opts); if (!t && !shoot && opts.length) t = rnd(opts).name; let res = "";
     if (shoot && t){ G.night.shot = t; p.notes.push(`Ночь ${G.day}: ты стрелял в игрока ${t}.`); G.last = {st, undo(){ G.night.shot = null; p.notes.pop(); }}; await show(p, `Стреляет в игрока ${t}.`, str(d.thoughts, 600), false, "Просыпается комиссар…"); return; }
@@ -460,7 +478,7 @@ async function runStep(st){
   if (st.k === "vote"){
     const opts = alive().filter(o => o !== p);
     focus(p); thinking(p);
-    const {d, raw} = await ask(p, "Голосование. Кого выгоняешь из игры? Варианты: " + opts.map(o => o.name).join(", ") + '. Воздержаться нельзя: назови ровно одно имя из списка.' + hint(p), '{"thoughts": "скрытые рассуждения", "target": "имя из списка"}');
+    const {d, raw} = await job(st);
     let t = pick(d, raw, opts); const forced = !t && opts.length; if (forced) t = rnd(opts).name;   // голос обязателен
     G.ballots[p.name] = t; drawVotes();
     const cnt = p.role !== "mafia" && !forced && t ? [1, byName(t).role === "mafia" ? 1 : 0] : [0, 0]; p.vn = (p.vn || 0) + cnt[0]; p.vh = (p.vh || 0) + cnt[1];
@@ -478,7 +496,7 @@ async function runStep(st){
     else {
       // равенство: стол решает, выгнать всех с равными голосами или никого
       G.tie = {names:lead, v:{}}; say(`Голоса равны: ${lead.join(", ")}. Стол голосует: выгнать всех их или никого.`);
-      G.queue.unshift(...alive().map(x => ({k:"tievote", p:x})), {k:"tieTally"});
+      G.queue.unshift(...alive().map(x => ({k:"tievote", p:x})), {k:"tieTally"}); prefetch(["tievote"]);
       await show(null, `Голоса равны: ${lead.join(", ")}. Стол голосует: выгнать всех их сразу или никого.`, "", true);
     }
     return;
@@ -486,7 +504,7 @@ async function runStep(st){
   if (st.k === "tievote"){
     if (!G.tie) return;
     focus(p); thinking(p);
-    const {d, raw} = await ask(p, `Голоса равны между: ${G.tie.names.join(", ")}. Реши: выгнать их всех сразу или не выгонять никого. Подумай, выгодно ли это твоей команде.` + hint(p), '{"thoughts": "скрытые рассуждения", "choice": "выгнать | оставить"}');
+    const {d, raw} = await job(st);
     const c = String(d.choice || raw || "").toLowerCase(), out = /выгн|изгн|казн|убр/.test(c) && !/не выгон|никого/.test(c);
     G.tie.v[p.name] = out;
     G.last = {st, undo(){ if (G.tie) delete G.tie.v[p.name]; }};
@@ -591,6 +609,7 @@ function spreadVoice(p){
   for (let i = 0; i < 12 && same.some(x => Math.abs(x.design.voice_pitch - p.design.voice_pitch) < .07); i++) p.design.voice_pitch = +(lo + Math.random()*(hi-lo)).toFixed(2);
 }
 async function addPlayer(prov, model, role, url, custom){
+  if (G.phase === "over"){ show(null, "Партия закончена. Начни новую, чтобы посадить игрока.", "", true); return false; }
   const br = brandOf(model), name = freeName((custom || "").trim() || br.name);
   const p = {name, maker:br.maker, prov, model, url:url||"", label: prov === "pollinations" ? "GPT-OSS 20B" : model.split("/").pop().replace(":free",""), role:role||"civilian", alive:true, notes:[], design:cleanDesign({})};
   spreadVoice(p); p.av = makeAvatar(p); G.players.push(p); layout(); renderSeats();
@@ -810,7 +829,7 @@ function voiceOf(p){
 }
 function speak(p, text){
   return new Promise(res => {
-    const est = Math.min(4500, 500 + text.length * 22);
+    const est = Math.min(2500, 300 + text.length * 12);
     if ($("sound").value !== "1" || !synth || !window.SpeechSynthesisUtterance) return setTimeout(res, G.auto ? est : 0);
     try {
       synth.cancel();
@@ -926,7 +945,7 @@ function lineup(n){
   provs.sort((a, b) => (a[0] === "pollinations") - (b[0] === "pollinations"));   // модель без ключа последней
   const out = [], seen = new Set();
   for (let round = 0; out.length < n && round < 12; round++) for (const [k, v] of provs){
-    const m = v.models[round]; if (!m || out.length >= n) continue;
+    const m = v.models[round]; if (!m || out.length >= n || (flaky[k + "|" + m] || 0) >= 2) continue;
     const b = brandOf(m).name; if (seen.has(b)) continue; seen.add(b); out.push([k, m]);
   }
   return out;

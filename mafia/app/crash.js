@@ -69,6 +69,7 @@ window.crashTest = async function (games = 100, seed = 1) {
     chaos = [0, 0.15, 0.3, 0.6, 0.95][g % 5];
     const n = 4 + ri(13), host = g % 3 === 2;   // каждая третья партия с буйным ведущим
     for (const k in PROV) PROV[k].dead = rand() < 0.15 && k !== "pollinations";
+    if (g % 4 === 0) for (const k in flaky) delete flaky[k];   // память о сбойных моделях живёт несколько партий
     $("setup").hidden = true; $("drawer").hidden = true;
     $("sPlayers").value = n; $("sDon").value = rand() < 0.7 ? "1" : "0"; $("sFill").value = rand() < 0.7 ? "1" : "0"; setupRefresh();
     const mm = $("sMafia").options; $("sMafia").value = mm[ri(mm.length)].value;
