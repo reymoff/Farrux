@@ -35,7 +35,7 @@ input,select{font:14px var(--body);color:var(--fg);background:#0f1018;border:1px
 .seat{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:8px 0;border-bottom:1px solid var(--line)}
 .seat b.dead{text-decoration:line-through;color:var(--mute)}
 .seat small{color:var(--mute);grid-column:1;overflow-wrap:anywhere}
-.seat button{grid-row:1/3;grid-column:2;align-self:center;padding:6px 9px}
+.seat .acts{grid-row:1/3;grid-column:2;align-self:center;display:grid;gap:4px}.seat .acts button,.seat .acts select{padding:6px 8px;font-size:12px;width:150px}
 .role{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 .role.mafia{color:var(--blood)}.role.doctor,.role.commissar{color:var(--gold)}.role.civilian{color:var(--town)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -66,6 +66,7 @@ label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4p
     <button id="bSay">Озвучить снова</button>
     <button id="bRedo">Переспросить</button>
     <button id="bSkip">Следующий этап</button>
+    <button id="bEnd" class="danger">Закончить партию</button>
   </div>
 </div>
 <div id="setup"><div class="card">
@@ -75,6 +76,7 @@ label{font-size:12px;color:var(--mute);display:flex;flex-direction:column;gap:4p
     <label>Мафий<select id="sMafia"></select></label>
   </div>
   <label>Дон мафии<select id="sDon"><option value="1">есть: жертву выбирает он</option><option value="0">нет: мафия решает большинством</option></select></label>
+  <label>Если разных нейросетей меньше, чем мест<select id="sFill"><option value="1">добрать стол копиями тех, кто отвечает</option><option value="0">играть меньшим столом, без копий</option></select></label>
   <div class="note" id="sNote"></div>
   <div class="note" id="sList"></div>
   <button id="sGo" class="main">Посадить всех автоматически и начать</button>
@@ -168,7 +170,7 @@ async function callLLM(p, system, user, tries = 4, timeout = 25000){
         const body = await r.text(); last = "HTTP " + r.status + " " + body.slice(0,160);
         const ra = body.match(/Retry after (\d+)s/);       // бесплатная очередь: ждём, сколько просят
         if (ra){ $("sub").innerHTML = secretNow() ? `<div class="who">Ведущий</div><div>Город спит… (очередь бесплатной модели: ${+ra[1]} с)</div>` : `<div class="who">${esc(p.name)} <span>${esc(p.label)} ждёт очереди бесплатной модели: ${+ra[1]} с</span></div>`; await sleep((+ra[1] + 1) * 1000); a--; if (++waits > 6) break; continue; }
-        if (r.status === 429 && /per-day|per day|daily|quota/i.test(body)){ pr.dead = true; last = "дневной лимит источника «" + pr.title + "» исчерпан"; break; }
+        if (r.status === 429 && /per-?day|per day|perday|daily/i.test(body)){ pr.dead = true; last = "дневной лимит источника «" + pr.title + "» исчерпан"; break; }
         if ([400,401,403,404].includes(r.status)) break; await sleep((r.status === 429 ? Math.min(20, +r.headers.get("retry-after") || 4*(a+1)) : 1.5*(a+1)) * 1000); continue; }
       const d = await r.json(), mm = (d.choices && d.choices[0] && d.choices[0].message) || {}, txt = mm.content || mm.reasoning_content || mm.reasoning || "";
       if (txt.trim()) return txt;
@@ -202,7 +204,7 @@ const RULES = `Ты играешь в настольную игру Мафия. 
 Правила:
 - Роли: мафия (знает своих), один доктор, один комиссар, остальные мирные жители. Двух докторов или двух комиссаров не бывает. Роли скрыты.
 - Ночь: мафия совещается и убивает одного игрока. Если в игре есть дон мафии, он глава: мафия спорит, но убит будет тот, кого назвал дон. Доктор лечит одного (если угадал жертву, она выживает; дважды подряд одного лечить нельзя). Комиссар в первую ночь только проверяет одного игрока и узнаёт, мафия он или нет; со второй ночи он каждую ночь выбирает одно из двух: проверить игрока или выстрелить в него.
-- День: все обсуждают, затем голосуют. Голосовать обязан каждый живой игрок: воздержаться нельзя, за себя голосовать нельзя. Набравший больше всех голосов выбывает из игры. При равенстве голосов решает ведущий. Роль выбывшего вскрывается.
+- День: все обсуждают, затем голосуют. Голосовать обязан каждый живой игрок: воздержаться нельзя, за себя голосовать нельзя. Набравший больше всех голосов выбывает из игры. При равенстве голосов стол голосует ещё раз: выгнать сразу всех, у кого голосов поровну, или не выгонять никого. Роль выбывшего вскрывается.
 - Выбывшие и убитые больше не говорят и не голосуют.
 - Мирные (с доктором и комиссаром) побеждают, когда вся мафия выбыла. Мафия побеждает, когда её не меньше, чем остальных.
 
@@ -241,9 +243,10 @@ function ctx(p){
   if (p.notes.length) c += "\n\nТВОИ ЛИЧНЫЕ ЗАМЕТКИ (видишь только ты):\n" + p.notes.join("\n");
   return c;
 }
-function swapModel(p, why){
+function swapModel(p, why, pickC){
   const used = new Set(G.players.map(x => x.prov + "|" + x.model));
-  const c = lineup(16).find(([k, m]) => !used.has(k + "|" + m)) || (p.prov !== "pollinations" ? ["pollinations", "openai-fast"] : null);
+  const brands = new Set(G.players.filter(x => x !== p).map(x => brandOf(x.model).name));
+  const c = pickC || lineup(16).find(([k, m]) => !used.has(k + "|" + m) && !brands.has(brandOf(m).name)) || (p.prov !== "pollinations" ? ["pollinations", "openai-fast"] : null);
   if (!c) return false;
   const old = p.name, br = brandOf(c[1]);
   p.prov = c[0]; p.model = c[1]; p.url = ""; p.maker = br.maker; p.failed = false;
@@ -448,7 +451,34 @@ async function runStep(st){
     const top = Math.max(0, ...Object.values(c)), lead = Object.keys(c).filter(k => c[k] === top);
     if (lead.length === 1){ focus(byName(lead[0])); const r = rn(byName(lead[0])); eliminate(lead[0], "По итогам голосования выбывает"); await show(null, `Стол выгоняет игрока ${lead[0]}. Он был: ${r}.`, "", true); }
     else if (!lead.length){ say("Никто не получил голосов, никто не выбывает."); await show(null, "Никто не получил голосов. Никто не выбывает.", "", true); }
-    else { G.pending = {type:"tie", names:lead}; await show(null, `Голоса равны: ${lead.join(", ")}. Решает ведущий.`, "", true); }
+    else {
+      // равенство: стол решает, выгнать всех с равными голосами или никого
+      G.tie = {names:lead, v:{}}; say(`Голоса равны: ${lead.join(", ")}. Стол голосует: выгнать всех их или никого.`);
+      G.queue.unshift(...alive().map(x => ({k:"tievote", p:x})), {k:"tieTally"});
+      await show(null, `Голоса равны: ${lead.join(", ")}. Стол голосует: выгнать всех их сразу или никого.`, "", true);
+    }
+    return;
+  }
+  if (st.k === "tievote"){
+    if (!G.tie) return;
+    focus(p); thinking(p);
+    const {d, raw} = await ask(p, `Голоса равны между: ${G.tie.names.join(", ")}. Реши: выгнать их всех сразу или не выгонять никого. Подумай, выгодно ли это твоей команде.` + hint(p), '{"thoughts": "скрытые рассуждения", "choice": "выгнать | оставить"}');
+    const c = String(d.choice || raw || "").toLowerCase(), out = /выгн|изгн|казн|убр/.test(c) && !/не выгон|никого/.test(c);
+    G.tie.v[p.name] = out;
+    G.last = {st, undo(){ if (G.tie) delete G.tie.v[p.name]; }};
+    await show(p, out ? "Выгнать всех, у кого голосов поровну." : "Никого не выгонять.", str(d.thoughts, 600), true);
+    return;
+  }
+  if (st.k === "tieTally"){
+    if (!G.tie) return;
+    const e = Object.entries(G.tie.v).filter(([k]) => byName(k)?.alive), yes = e.filter(([, v]) => v).length, no = e.length - yes;
+    say(`Переголосование: выгнать ${yes}, оставить ${no}.`);
+    if (yes > no){
+      const names = G.tie.names.filter(n => byName(n)?.alive), roles = names.map(n => `${n} (${rn(byName(n))})`);
+      names.forEach(n => eliminate(n, "По итогам переголосования выбывает"));
+      await show(null, `Стол выгоняет всех, у кого голосов поровну: ${roles.join(", ")}.`, "", true);
+    } else { say("Стол решил никого не выгонять."); await show(null, `Выгнать: ${yes}, оставить: ${no}. Никто не выбывает.`, "", true); }
+    G.tie = null;
     return;
   }
   if (st.k === "end"){
@@ -794,10 +824,10 @@ function ui(){
   $("bNext").textContent = filling ? "Рассаживаются…" : G.busy ? "Думает…" : G.phase === "lobby" ? "Начать игру" : over ? "Новая партия" : "Дальше";
   $("bNext").disabled = G.busy || !!G.pending || filling;
   $("bRedo").disabled = G.busy || !G.last; $("bSay").disabled = G.busy || !lastSay;
-  $("bSkip").disabled = G.busy || G.phase === "lobby" || G.phase === "over";
+  $("bSkip").disabled = G.busy || G.phase === "lobby" || G.phase === "over"; $("bEnd").disabled = $("bSkip").disabled;
   $("bBack").disabled = G.busy || histI <= 0; $("bFwd").hidden = histI >= hist.length - 1; $("bFwd").disabled = G.busy;
   $("bAuto").textContent = "Авто: " + (G.auto ? "вкл" : "выкл"); $("bAuto").classList.toggle("on", G.auto);
-  const names = {lobby:"Стол собирается", start:"Знакомство", night:"Ночь " + G.day, day:"День " + G.day + ": обсуждение", vote:"День " + G.day + ": голосование", over:G.winner === "town" ? "Победили мирные" : "Победила мафия"};
+  const names = {lobby:"Стол собирается", start:"Знакомство", night:"Ночь " + G.day, day:"День " + G.day + ": обсуждение", vote:"День " + G.day + ": голосование", over:G.winner === "town" ? "Победили мирные" : G.winner === "stopped" ? "Партия остановлена" : "Победила мафия"};
   $("phase").innerHTML = `Мафия нейросетей<small>${names[G.phase]} · в игре ${alive().length} из ${G.players.length}</small>`;
   const dc = $("decide"); dc.hidden = !G.pending; dc.innerHTML = "";
   if (G.pending){
@@ -813,15 +843,18 @@ function renderSeats(){
     const role = sp && G.phase !== "lobby" ? ` <span class="role ${p.role}">${rn(p)}</span>` : "";
     d.innerHTML = `<div><b class="${p.alive ? "" : "dead"}"></b>${role}</div><small></small>`;
     d.querySelector("b").textContent = p.name; d.querySelector("small").textContent = p.label + (p.design.persona ? " · " + p.design.persona : "");
-    if (p.alive){ const b = document.createElement("button"); b.className = "danger"; b.textContent = G.phase === "lobby" ? "Убрать" : "Выгнать"; b.onclick = () => kick(p.name); d.appendChild(b);
-      const r = document.createElement("button"); r.textContent = "Заменить модель"; r.disabled = G.busy; r.onclick = () => { if (!G.busy && !swapModel(p, "замена ведущим")) show(null, "Свободных рабочих моделей больше нет.", "", true); }; d.appendChild(r); }
+    if (p.alive){ const b = document.createElement("button"); b.className = "danger"; b.textContent = G.phase === "lobby" ? "Убрать" : "Выгнать"; b.onclick = () => kick(p.name); const box = document.createElement("div"); box.className = "acts"; box.appendChild(b); d.appendChild(box);
+      const r = document.createElement("select"); r.disabled = G.busy; r.title = "Заменить модель этого игрока";
+      r.innerHTML = '<option value="">Заменить на…</option><option value="auto">любую свободную рабочую</option>' + Object.entries(PROV).filter(([k, v]) => k !== "custom" && !v.dead && (!v.key || store.get(v.key))).map(([k, v]) => v.models.map(m => `<option value="${k}|${m}">${esc(brandOf(m).name)} · ${esc(k === "pollinations" ? "GPT-OSS 20B" : m.split("/").pop().replace(":free", ""))}${G.players.some(x => x.prov === k && x.model === m) ? " (уже за столом)" : ""}</option>`).join("")).join("");
+      r.onchange = () => { const v = r.value; r.value = ""; if (!v || G.busy) return; const i = v.indexOf("|"); if (!swapModel(p, "замена ведущим", v === "auto" ? null : [v.slice(0, i), v.slice(i + 1)])) show(null, "Свободных рабочих моделей больше нет.", "", true); };
+      box.appendChild(r); }
     el.appendChild(d);
   }
   ui();
 }
 function fillProviders(){
   const s = $("aProv"), cur = s.value; s.innerHTML = "";
-  for (const [k, v] of Object.entries(PROV)){ if (v.key && k !== "custom" && !store.get(v.key)) continue; const o = document.createElement("option"); o.value = k; o.textContent = v.title; s.appendChild(o); }
+  for (const [k, v] of Object.entries(PROV)){ const o = document.createElement("option"); o.value = k; o.textContent = v.title + (v.key && k !== "custom" && !store.get(v.key) ? " · нужен ключ" : v.dead ? " · лимит на сегодня исчерпан" : ""); s.appendChild(o); }
   if ([...s.options].some(o => o.value === cur)) s.value = cur;
   fillModels();
 }
@@ -838,6 +871,12 @@ $("bNext").onclick = next;
 $("bAuto").onclick = () => { G.auto = !G.auto; ui(); if (G.auto && !G.busy && G.phase !== "lobby" && G.phase !== "over") next(); };
 $("bSay").onclick = async () => { if (lastSay && !G.busy){ speaking = lastSay.p; if (lastSay.p) focus(lastSay.p); await speak(lastSay.p, lastSay.text); speaking = null; } };
 $("bRedo").onclick = redo;
+$("bEnd").onclick = () => {
+  if (G.busy || G.phase === "lobby" || G.phase === "over") return;
+  G.auto = false; G.pending = null; G.queue = []; G.tie = null; G.last = null; G.winner = "stopped"; G.phase = "over"; if (synth) synth.cancel(); setNight(false); clearVotes();
+  G.players.forEach(x => refreshLabel(x, true)); say("Ведущий закончил партию досрочно.");
+  show(null, "Партия закончена ведущим. Мафией были: " + G.players.filter(x => x.role === "mafia").map(x => x.name).join(", ") + ".", "", true); renderSeats();
+};
 $("zIn").onclick = () => setZoom(zoomT * .82); $("zOut").onclick = () => setZoom(zoomT * 1.22);
 $("bBack").onclick = () => { if (G.auto){ G.auto = false; } replay(-1); };
 $("bFwd").onclick = () => replay(1);
@@ -849,6 +888,7 @@ $("bAdd").onclick = () => {
   if (G.players.length >= 16) return;
   const prov = $("aProv").value, model = $("aModel").value.trim(); if (!model) return;
   if (prov === "custom" && !$("aUrl").value.trim()) return $("aUrl").focus();
+  if (prov !== "custom" && PROV[prov].key && !store.get(PROV[prov].key)){ $(PROV[prov].key).scrollIntoView({block:"center"}); $(PROV[prov].key).focus(); return show(null, "Для источника «" + PROV[prov].title + "» нужен ключ: вставь его в подсвеченное поле.", "", true); }
   addPlayer(prov, model, G.phase === "lobby" ? "civilian" : oneOnly($("aRole").value === "random" ? rnd(["civilian","civilian","civilian","mafia","doctor","commissar"]) : $("aRole").value), prov === "custom" ? $("aUrl").value.trim() : "", $("aName").value); $("aName").value = "";
 };
 fillProviders(); ui();
@@ -856,10 +896,11 @@ fillProviders(); ui();
 // состав: по кругу берём по одной модели из каждого источника с ключом, чтобы компании были разные
 function lineup(n){
   const provs = Object.entries(PROV).filter(([k, v]) => k !== "custom" && k !== "mistral" && !v.dead && (!v.key || store.get(v.key)));
+  provs.sort((a, b) => (a[0] === "pollinations") - (b[0] === "pollinations"));   // модель без ключа последней
   const out = [], seen = new Set();
   for (let round = 0; out.length < n && round < 12; round++) for (const [k, v] of provs){
     const m = v.models[round]; if (!m || out.length >= n) continue;
-    const b = m.split("/").pop().replace(":free", "").toLowerCase(); if (seen.has(b)) continue; seen.add(b); out.push([k, m]);
+    const b = brandOf(m).name; if (seen.has(b)) continue; seen.add(b); out.push([k, m]);
   }
   return out;
 }
@@ -870,19 +911,26 @@ async function fillTable(){
   G.players.forEach(p => scene.remove(p.av.g)); G.players = []; G.phase = "lobby"; G.queue = []; G.pub = []; G.pending = null; G.last = null; clearVotes(); setNight(false); $("log").textContent = ""; renderSeats();
   // молчащую модель убираем и берём следующую из списка
   // каждая модель садится один раз; молчащих убираем и пробуем следующих из списка
-  let cand = lineup(16);
-  while (G.phase === "lobby" && G.players.length < n && cand.length){
-    const batch = cand.splice(0, n - G.players.length).filter(([prov]) => !PROV[prov].dead);
-    await Promise.all(batch.map(([prov, model]) => addPlayer(prov, model)));
-    for (const bad of G.players.filter(p => p.failed)){ G.players = G.players.filter(p => p !== bad); scene.remove(bad.av.g); }
+  let cand = lineup(16); const missed = [];
+  const seat = async list => {
+    await Promise.all(list.map(([prov, model]) => addPlayer(prov, model)));
+    for (const bad of G.players.filter(p => p.failed)){ G.players = G.players.filter(p => p !== bad); scene.remove(bad.av.g); if (!PROV[bad.prov].dead) missed.push([bad.prov, bad.model]); }
     layout(); renderSeats();
-  }
-  const uniq = G.players.length;
-  while (G.players.length < 4) await addPlayer("pollinations", "openai-fast");   // меньше четырёх играть нельзя
+  };
+  while (G.phase === "lobby" && G.players.length < n && cand.length) await seat(cand.splice(0, n - G.players.length).filter(([prov]) => !PROV[prov].dead));
+  // вторая попытка для тех, кто не ответил с первого раза
+  if (G.phase === "lobby" && G.players.length < n && missed.length) await seat(missed.splice(0, n - G.players.length));
+  const uniq = G.players.length, min = $("sFill").value === "1" ? n : 4;
+  // добор копиями по кругу из тех, кто отвечает
+  const base = G.players.map(p => [p.prov, p.model]); if (!base.length) base.push(["pollinations", "openai-fast"]);
+  for (let i = 0; G.phase === "lobby" && G.players.length < min && i < 40; i++){ const [prov, model] = base[i % base.length]; if (!(await addPlayer(prov, model))){ const b = G.players.pop(); scene.remove(b.av.g); layout(); } }
+  // крайний случай: никто не отвечает, сажаем без придуманной внешности
+  while (G.phase === "lobby" && G.players.length < 4){ await addPlayer("pollinations", "openai-fast"); G.players[G.players.length - 1].failed = false; }
+  renderSeats();
   filling = false; $("bFill").disabled = false; ui();
   if (uniq < n){
     const dead = Object.values(PROV).filter(v => v.dead).map(v => v.title);
-    show(null, `Сейчас отвечают только ${uniq} разных нейросетей, за стол сели они.` + (dead.length ? ` Дневной лимит исчерпан: ${dead.join(", ")}. Он обновится завтра.` : "") + " Добавь ключ Hugging Face в настройках, чтобы моделей стало больше.", "", true);
+    show(null, `Сейчас отвечают только ${uniq} разных нейросетей.` + (G.players.length > uniq ? ` Остальные места заняли их копии (имя с цифрой).` : ` За стол сели они.`) + (dead.length ? ` Дневной лимит исчерпан: ${dead.join(", ")}. Он обновится завтра.` : "") + " Добавь ключ Hugging Face в настройках, чтобы моделей стало больше.", "", true);
   }
 }
 $("nPlayers").value = store.get("nPlayers") || 8; $("bFill").onclick = fillTable;
