@@ -134,7 +134,7 @@ const store = { get(k){ try { return localStorage.getItem(k) || ""; } catch(e){ 
 const PROV = {
   pollinations:{ title:"Без ключа: GPT-OSS (OpenAI)", url:"/api/chat", key:null, gap:3500,
     models:["openai-fast"] },
-  openrouter:{ title:"OpenRouter", url:"https://openrouter.ai/api/v1/chat/completions", key:"kOpenrouter", gap:2200,
+  openrouter:{ title:"OpenRouter", url:"https://openrouter.ai/api/v1/chat/completions", key:"kOpenrouter", gap:3200,
     models:["baidu/ernie-5.5-flash-preview:free","inclusionai/ling-3.2-flash:free","particle-ai/particle-1:free","recursive/flint-v1.0:free","nvidia/nemotron-3.5-lightning:free","google/gemma-4-31b-it:free","liquid/lfm-3-1.7b:free"] },
   gemini:{ title:"Google Gemini", url:"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", key:"kGemini", gap:2200,
     models:["gemini-flash-lite-latest","gemini-flash-latest"] },
@@ -155,7 +155,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":
 // ночью при скрытых ролях нельзя показывать, кто сейчас ходит
 const secretNow = () => G.phase === "night" && $("spoil").value !== "1";
 
-async function callLLM(p, system, user, tries = 2, timeout = 20000){
+async function callLLM(p, system, user, tries = 3, timeout = 20000){
   const pr = PROV[p.prov], url = p.url || pr.url;
   const headers = Object.assign({"Content-Type":"application/json"}, pr.headers || {});
   const key = pr.key ? store.get(pr.key) : "";
@@ -176,11 +176,11 @@ async function callLLM(p, system, user, tries = 2, timeout = 20000){
         if (ra){ $("sub").innerHTML = secretNow() ? `<div class="who">Ведущий</div><div>Город спит… (очередь бесплатной модели: ${+ra[1]} с)</div>` : `<div class="who">${esc(p.name)} <span>${esc(p.label)} ждёт очереди бесплатной модели: ${+ra[1]} с</span></div>`; await sleep((+ra[1] + 1) * 1000); a--; if (++waits > 6) break; continue; }
         if (r.status === 429 && /per-?day|per day|perday|daily/i.test(body)){ pr.dead = true; last = "дневной лимит источника «" + pr.title + "» исчерпан"; break; }
         if ([400,401,403,404].includes(r.status)) break; const ra2 = +r.headers.get("retry-after") || 0; if (r.status === 429 && ra2 > 12) break;   // ждать долго: быстрее заменить модель
-        await sleep((r.status === 429 ? Math.max(2, ra2) : 1.5) * 1000); continue; }
+        await sleep((r.status === 429 ? Math.max(3 * (a + 1), ra2) : 1.5) * 1000); continue; }
       const d = await r.json(), mm = (d.choices && d.choices[0] && d.choices[0].message) || {}, txt = mm.content || mm.reasoning_content || mm.reasoning || "";
       if (txt.trim()) return txt;
       last = "пустой ответ";
-    } catch(e){ clearTimeout(t); last = String(e.message || e).slice(0,160); await sleep(1500*(a+1)); }
+    } catch(e){ clearTimeout(t); last = String(e.message || e).slice(0,160); if (a >= 1) break; await sleep(1500); }
   }
   flaky[p.prov + "|" + p.model] = (flaky[p.prov + "|" + p.model] || 0) + 1;
   throw new Error(last);
@@ -283,6 +283,7 @@ function hint(p){
 // пока стол слушает одного, остальные уже думают.
 function stepAsk(st){
   const p = st.p;
+  if (st.k === "speech") return ask(p, "День, обсуждение. Твоя очередь говорить. Скажи столу 2-4 предложения: твой главный подозреваемый и конкретный факт из протокола, на котором это основано. Если фактов совсем нет, предложи, на кого смотреть и почему. Не повторяй уже сказанное другими." + hint(p), '{"thoughts": "скрытые рассуждения, их никто не увидит", "speech": "то, что ты говоришь вслух", "emotion": "спокойно | злость | печаль | радость | удивление"}');
   if (st.k === "vote"){ const opts = alive().filter(o => o !== p); return ask(p, "Голосование. Кого выгоняешь из игры? Варианты: " + opts.map(o => o.name).join(", ") + '. Воздержаться нельзя: назови ровно одно имя из списка.' + hint(p), '{"thoughts": "скрытые рассуждения", "target": "имя из списка"}'); }
   if (st.k === "tievote") return ask(p, `Голоса равны между: ${G.tie.names.join(", ")}. Реши: выгнать их всех сразу или не выгонять никого. Подумай, выгодно ли это твоей команде.` + hint(p), '{"thoughts": "скрытые рассуждения", "choice": "выгнать | оставить"}');
   if (st.k === "doctor"){ const opts = alive().filter(x => x.name !== G.lastHeal); return ask(p, "Ночь. Ты доктор. Кого лечишь? Можно себя. Варианты: " + opts.map(o => o.name).join(", ") + ".", '{"thoughts": "скрытые рассуждения", "target": "имя"}'); }
@@ -464,13 +465,13 @@ async function runStep(st){
   }
   if (st.k === "speech"){
     focus(p); thinking(p);
-    const {d, raw, err} = await ask(p, "День, обсуждение. Твоя очередь говорить. Скажи столу 2-4 предложения: твой главный подозреваемый и конкретный факт из протокола, на котором это основано. Если фактов совсем нет, предложи, на кого смотреть и почему. Не повторяй уже сказанное другими." + hint(p), '{"thoughts": "скрытые рассуждения, их никто не увидит", "speech": "то, что ты говоришь вслух", "emotion": "спокойно | злость | печаль | радость | удивление"}');
+    const {d, raw, err} = await job(st);
     let sp = str(d.speech, 700).trim();
-    if (!sp && raw && !Object.keys(d).length) sp = raw.replace(/\s+/g," ").slice(0,500);
     if (!sp) sp = err ? "(молчит: нет связи с моделью)" : "(молчит)";
     p.emo = EMO.find(e => String(d.emotion || "").toLowerCase().includes(e)) || "спокойно";
     const line = `${p.name}: ${sp}`; say(line);
-    G.last = {st, undo(){ const i = G.pub.lastIndexOf(line); if (i >= 0) G.pub.splice(i,1); }};
+    const nx = G.queue[0]; if (nx && nx.k === "speech" && nx.p.alive && !nx.job) nx.job = stepAsk(nx);
+    G.last = {st, undo(){ const i = G.pub.lastIndexOf(line); if (i >= 0) G.pub.splice(i,1); if (G.queue[0]) G.queue[0].job = null; }};
     await show(p, sp, str(d.thoughts, 600) + (err ? " [ошибка: " + err + "]" : ""), true);
     p.emo = "";
     return;
