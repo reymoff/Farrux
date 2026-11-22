@@ -1,0 +1,63 @@
+{
+ "players": [
+  {
+   "label": "YandexGPT 5 Lite 8B (Яндекс)",
+   "gguf": "models/yandex.gguf",
+   "n_ctx": 6144,
+   "max_tokens": 320,
+   "log_max_chars": 9000
+  },
+  {
+   "label": "Gemma 3 4B (Google)",
+   "gguf": "models/gemma.gguf",
+   "n_ctx": 6144,
+   "max_tokens": 320,
+   "log_max_chars": 9000
+  },
+  {
+   "label": "Llama 3.2 3B (Meta)",
+   "gguf": "models/llama.gguf",
+   "n_ctx": 6144,
+   "max_tokens": 320,
+   "log_max_chars": 9000
+  },
+  {
+   "label": "Qwen3 4B (Alibaba)",
+   "gguf": "models/qwen.gguf",
+   "n_ctx": 6144,
+   "max_tokens": 320,
+   "log_max_chars": 9000,
+   "sys_suffix": " /no_think"
+  },
+  {
+   "label": "Phi-4 mini (Microsoft)",
+   "gguf": "models/phi.gguf",
+   "n_ctx": 6144,
+   "max_tokens": 320,
+   "log_max_chars": 9000
+  },
+  {
+   "label": "Granite 3.3 2B (IBM)",
+   "gguf": "models/granite.gguf",
+   "n_ctx": 6144,
+   "max_tokens": 320,
+   "log_max_chars": 9000
+  },
+  {
+   "label": "SmolLM3 3B (Hugging Face)",
+   "gguf": "models/smollm.gguf",
+   "n_ctx": 6144,
+   "max_tokens": 320,
+   "log_max_chars": 9000,
+   "sys_suffix": " /no_think"
+  },
+  {
+   "label": "GPT-OSS 20B (OpenAI)",
+   "base_url": "https://text.pollinations.ai/openai",
+   "model": "openai-fast",
+   "retry_sleep": 6
+  }
+ ],
+ "mafia": 2,
+ "out": "game1.json"
+}
