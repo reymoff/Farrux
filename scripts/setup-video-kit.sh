@@ -25,5 +25,11 @@ V="$HOME/video-use"
 mkdir -p "$S" && ln -sfn "$V" "$S/video-use"
 # radar: глаза и уши для анализа конкурентов (.claude/skills/radar)
 python3 -c "import yt_dlp, faster_whisper, instaloader, openpyxl, reportlab" 2>/dev/null || pip install -q yt-dlp faster-whisper instaloader openpyxl reportlab >/dev/null 2>&1 || log "fail: radar deps"
+# скиллы репо (scout, radar, replica-*) видны в любой папке: линкуем в ~/.claude/skills
+R="$(cd "$(dirname "$0")/.." && pwd)/.claude/skills"
+for d in "$R"/*/; do
+  n="$(basename "$d")"
+  { [ -e "$S/$n" ] && [ ! -L "$S/$n" ]; } || ln -sfn "${d%/}" "$S/$n" 2>/dev/null || cp -r "${d%/}" "$S/$n"
+done
 command -v ffmpeg >/dev/null || log "нет ffmpeg: winget install ffmpeg / brew install ffmpeg / apt install ffmpeg"
 log "ok"

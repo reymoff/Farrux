@@ -11,6 +11,22 @@
 | 5 | [Emil Kowalski skills](https://github.com/emilkowalski/skills) | анимации: кривые, тайминги | скиллы `animate`, `emil-design-eng` |
 | 6 | [video-use](https://github.com/browser-use/video-use) | режет сырое видео по расшифровке | скилл, нужен `ELEVENLABS_API_KEY` в `~/video-use/.env` |
 | 7 | [frontend-design](https://github.com/anthropics/claude-plugins-official) | выразительные кадры и страницы | плагин |
+| 8 | [Replica](https://github.com/Jakeschincariol/replica-skill) | клон приложения за 11 этапов, clean room | скиллы `replica-*` в `.claude/skills`, MIT |
+| 9 | scout | ищет и ставит готовые скиллы, плагины, коннекторы | скилл `.claude/skills/scout` |
+
+Скиллы из `.claude/skills` скрипт линкует в `~/.claude/skills`, поэтому они работают в любой папке на компьютере. В чате Claude (телефон, веб) те же `replica` и `tool-scout` сохранены в аккаунте.
+
+## Синхронизация скиллов между устройствами
+
+Скилл, созданный в Claude Code на одном компьютере, сам появляется на другом. Источник правды: приватный репозиторий `reymoff/claude-skills`.
+
+```bash
+python3 scripts/install-skills-sync.py   # один раз на каждом компьютере (Windows: python)
+```
+
+Установщик ставит хуки на начало и конец сессии. `skills-sync.py` тянет репо, отправляет новые и изменённые скиллы из `~/.claude/skills`, забирает чужие. Удаления не разносит, скиллы с ключами и `.env` не отправляет, лог в `~/.claude/skills-sync.log`.
+
+В чат и на телефон скилл попадает через аккаунт claude.ai: скажи в чате "синхронизируй скиллы" (скилл `skill-sync`) и сохрани карточки. Обратно, из аккаунта в Claude Code, скиллы приезжают сами: это встроенная синхронизация Claude Code.
 
 ## Радар конкурентов
 
